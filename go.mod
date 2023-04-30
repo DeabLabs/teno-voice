@@ -12,6 +12,7 @@ require (
 
 require (
 	github.com/disgoorg/json v1.0.0 // indirect
+	github.com/golang/gddo v0.0.0-20210115222349-20d68f94ee1f // indirect
 	github.com/gorilla/websocket v1.5.0 // indirect
 	github.com/sasha-s/go-csync v0.0.0-20210812194225-61421b77c44b // indirect
 	golang.org/x/crypto v0.8.0 // indirect

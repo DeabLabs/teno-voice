@@ -4,39 +4,73 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"time"
 
 	"com.deablabs.teno-voice/internal/deps"
+	"com.deablabs.teno-voice/pkg/helpers"
 	"github.com/disgoorg/disgo/voice"
 	"github.com/disgoorg/snowflake/v2"
 )
 
+type JoinRequest struct {
+	GuildID   string
+	ChannelID string
+}
+
+type LeaveRequest struct {
+	GuildID string
+}
+
+type CallStatus struct {
+	IsInCall bool
+	Err      error
+}
+
 func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		ctx, cancel := context.WithTimeout(ctx, time.Second*5)
+		defer cancel()
+
+		d := make(chan CallStatus, 1)
 		go func() {
-			// TODO Join the voice call
-			log.Println("Joining voice call...")
 			client := *dependencies.DiscordClient
 
-			guildID, err := snowflake.Parse("795715599405547531")
+			var jr JoinRequest
+
+			err := helpers.DecodeJSONBody(w, r, &jr)
 			if err != nil {
-				panic("error parsing guildID: " + err.Error())
+				println(err.Error())
+				var mr *helpers.MalformedRequest
+				if errors.As(err, &mr) {
+					d <- CallStatus{IsInCall: false, Err: fmt.Errorf(mr.Msg)}
+				} else {
+					d <- CallStatus{IsInCall: false, Err: fmt.Errorf(http.StatusText(http.StatusInternalServerError) + ": " + err.Error())}
+				}
+				return
 			}
 
-			channelID, err := snowflake.Parse("1071504426570883143")
+			guildID, err := snowflake.Parse(jr.GuildID)
 			if err != nil {
-				panic("error parsing channelID: " + err.Error())
+				d <- CallStatus{IsInCall: false, Err: fmt.Errorf("error parsing guildID: " + err.Error())}
+				return
+			}
+
+			channelID, err := snowflake.Parse(jr.ChannelID)
+			if err != nil {
+				d <- CallStatus{IsInCall: false, Err: fmt.Errorf("error parsing channelID: " + err.Error())}
+				return
 			}
 
 			conn := client.VoiceManager().CreateConn(guildID)
 
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+			ctx, cancel := context.WithTimeout(ctx, time.Second*5)
 			defer cancel()
 			if err := conn.Open(ctx, channelID, false, false); err != nil {
-				panic("error connecting to voice channel: " + err.Error())
+				d <- CallStatus{IsInCall: false, Err: fmt.Errorf("error connecting to voice channel: " + err.Error())}
+				return
 			}
 
 			defer func() {
@@ -45,6 +79,7 @@ func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 				conn.Close(ctx2)
 			}()
 
+			d <- CallStatus{IsInCall: true, Err: nil}
 			println("starting playback")
 
 			if err := conn.SetSpeaking(ctx, voice.SpeakingFlagMicrophone); err != nil {
@@ -76,22 +111,56 @@ func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 
 		}()
 
-		w.Write([]byte("Joined voice call"))
+		select {
+		case <-ctx.Done():
+			w.Write([]byte("Timeout joining voice call"))
+			return
+
+		case result := <-d:
+			if result.Err != nil {
+				w.Write([]byte("Could not join voice call: " + result.Err.Error()))
+				return
+			}
+
+			if result.IsInCall {
+				w.Write([]byte("Joined voice call"))
+			} else {
+				w.Write([]byte("Could not join voice call"))
+			}
+			return
+		}
 	})
 }
 
 func LeaveVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Println("Leaving voice call...")
-
 		client := *dependencies.DiscordClient
 
-		guildID, err := snowflake.Parse("795715599405547531")
+		var lr LeaveRequest
+
+		err := helpers.DecodeJSONBody(w, r, &lr)
 		if err != nil {
-			panic("error parsing guildID: " + err.Error())
+			var mr *helpers.MalformedRequest
+			if errors.As(err, &mr) {
+				http.Error(w, mr.Msg, mr.Status)
+			} else {
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
+			return
+		}
+
+		guildID, err := snowflake.Parse(lr.GuildID)
+		if err != nil {
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
 		}
 
 		conn := client.VoiceManager().CreateConn(guildID)
+
+		if conn.ChannelID() == nil {
+			w.Write([]byte("Not in voice call"))
+			return
+		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 		defer cancel()
