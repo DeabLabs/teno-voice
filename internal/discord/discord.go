@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"com.deablabs.teno-voice/internal/deps"
+	speechtotext "com.deablabs.teno-voice/internal/speechToText"
 	"com.deablabs.teno-voice/pkg/helpers"
 	"github.com/disgoorg/disgo/voice"
 	"github.com/disgoorg/snowflake/v2"
+	"github.com/gorilla/websocket"
 )
 
 type JoinRequest struct {
@@ -35,26 +37,56 @@ type OpusPacket struct {
 }
 
 type Speaker struct {
-	ID      snowflake.ID
-	Packets []OpusPacket
-	Mu      sync.Mutex
+	ID                  snowflake.ID
+	transcriptionStream *websocket.Conn
+	Mu                  sync.Mutex
+	StreamContext       context.Context
+	ContextCancel       context.CancelFunc
+	lastPacket          time.Time
+	packetsSent         int
 }
 
-func (s *Speaker) AddPacket(packet OpusPacket) {
+func (s *Speaker) Init() {
+	newContext, cancel := context.WithCancel(context.Background())
+	s.StreamContext = newContext
+	s.ContextCancel = cancel
+	s.packetsSent = 0
+
+	wsc, err := speechtotext.NewStream(s.StreamContext, s.ID.String())
+
+	if err != nil {
+		panic("error getting transcription stream: " + err.Error())
+	}
+
+	s.transcriptionStream = wsc
+}
+
+func (s *Speaker) Close() {
+	s.ContextCancel()
+	s.transcriptionStream.Close()
+}
+
+func (s *Speaker) AddPacket(ctx context.Context, packet OpusPacket) {
 	s.Mu.Lock()
-	s.Packets = append(s.Packets, packet)
+	if s.transcriptionStream != nil {
+		// @TODO potentially buffer multiple packets before shipping them off to dg
+		s.transcriptionStream.WriteMessage(websocket.BinaryMessage, packet.Bytes)
+		s.lastPacket = packet.Timestamp
+		s.packetsSent++
+	}
 	s.Mu.Unlock()
 
 	// after 500 milliseconds, check if the last packet is older than 500 milliseconds
 	// if so, log the length of the packets and clear them
-	time.AfterFunc(time.Millisecond*500, func() {
-		s.Mu.Lock()
-		defer s.Mu.Unlock()
-		if len(s.Packets) > 0 && time.Since(s.Packets[len(s.Packets)-1].Timestamp) > time.Millisecond*500 {
-			fmt.Printf("Speaker %s has %d packets\n", s.ID, len(s.Packets))
-			s.Packets = make([]OpusPacket, 0)
-		}
-	})
+	// time.AfterFunc(time.Millisecond*500, func() {
+	// 	s.Mu.Lock()
+	// 	defer s.Mu.Unlock()
+	// 	if s.packetsSent > 0 && time.Since(s.lastPacket) > time.Millisecond*500 {
+	// 		fmt.Printf("Speaker %s has %d packets\n", s.ID, s.packetsSent)
+	// 		s.Close()
+	// 		s.Init()
+	// 	}
+	// })
 }
 
 func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
@@ -140,15 +172,18 @@ func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 
 				// create a speaker for the user if one doesn't exist
 				if _, ok := Speakers[userID]; !ok {
-					Speakers[userID] = &Speaker{
-						ID:      userID,
-						Packets: make([]OpusPacket, 0),
-						Mu:      sync.Mutex{},
+					s := &Speaker{
+						ID: userID,
+						Mu: sync.Mutex{},
 					}
+
+					Speakers[userID] = s
+
+					s.Init()
 				}
 
 				// add the packet to the speaker
-				Speakers[userID].AddPacket(OpusPacket{
+				Speakers[userID].AddPacket(ctx, OpusPacket{
 					Bytes:     packet.Opus,
 					Timestamp: time.Now(),
 				})
