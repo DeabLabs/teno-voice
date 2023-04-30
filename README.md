@@ -48,7 +48,7 @@ Teno Voice is a REST API that connects to a Discord voice server, receives audio
 To configure Teno Voice, create a `.env` file in the project root and set the following environment variables:
 
 ```
-DISCORD_TOKEN=<your-discord-bot-token>
+TOKEN=<your-discord-bot-token>
 ```
 
 Replace `<your-discord-bot-token>` with the token for the Teno Discord bot.
