@@ -28,6 +28,7 @@ func main() {
 
 	s := make(chan os.Signal, 1)
 
+	// create discord client
 	client, err := disgo.New(token,
 		bot.WithGatewayConfigOpts(gateway.WithIntents(gateway.IntentGuilds, gateway.IntentGuildVoiceStates, gateway.IntentGuildMessages)),
 	)
@@ -43,7 +44,7 @@ func main() {
 		client.Close(ctx)
 	}()
 
-	// open the gateway connection
+	// open the gateway connection to discord
 	if err = client.OpenGateway(context.TODO()); err != nil {
 		log.Fatal("error connecting to gateway: ", err)
 	}
@@ -52,9 +53,11 @@ func main() {
 	log.Info("Waiting for discord client to be ready")
 
 	// create a new instance of the Deps struct
+	// We pass this struct into the handlers so they can access the discord client
+	// and kill signal
 	dependencies := &deps.Deps{DiscordClient: &client, Signal: s}
 
-	// Set up the router
+	// Set up the router, connected to discord functionality
 	router := chi.NewRouter()
 	router.Post("/join", discord.JoinVoiceCall(dependencies))
 	router.Post("/leave", discord.LeaveVoiceCall(dependencies))

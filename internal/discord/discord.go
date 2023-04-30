@@ -42,7 +42,6 @@ func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 
 			err := helpers.DecodeJSONBody(w, r, &jr)
 			if err != nil {
-				println(err.Error())
 				var mr *helpers.MalformedRequest
 				if errors.As(err, &mr) {
 					d <- CallStatus{IsInCall: false, Err: fmt.Errorf(mr.Msg)}
@@ -108,7 +107,6 @@ func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 					continue
 				}
 			}
-
 		}()
 
 		select {

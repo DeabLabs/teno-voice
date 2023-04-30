@@ -84,8 +84,10 @@ teno-voice/
 │   │   └── middleware.go
 │   ├── llm/
 │   │   └── llm.go
-│   └── voice/
-│       └── voice.go
+│   ├── textToVoice/
+│   │   └── textToVoice.go
+│   └── voiceToText/
+│       └── voiceToText.go
 ├── pkg/
 │   ├── models/
 │   │   └── models.go
