@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"com.deablabs.teno-voice/internal/deps"
@@ -26,6 +27,34 @@ type LeaveRequest struct {
 type CallStatus struct {
 	IsInCall bool
 	Err      error
+}
+
+type OpusPacket struct {
+	Bytes     []byte
+	Timestamp time.Time
+}
+
+type Speaker struct {
+	ID      snowflake.ID
+	Packets []OpusPacket
+	Mu      sync.Mutex
+}
+
+func (s *Speaker) AddPacket(packet OpusPacket) {
+	s.Mu.Lock()
+	s.Packets = append(s.Packets, packet)
+	s.Mu.Unlock()
+
+	// after 500 milliseconds, check if the last packet is older than 500 milliseconds
+	// if so, log the length of the packets and clear them
+	time.AfterFunc(time.Millisecond*500, func() {
+		s.Mu.Lock()
+		defer s.Mu.Unlock()
+		if len(s.Packets) > 0 && time.Since(s.Packets[len(s.Packets)-1].Timestamp) > time.Millisecond*500 {
+			fmt.Printf("Speaker %s has %d packets\n", s.ID, len(s.Packets))
+			s.Packets = make([]OpusPacket, 0)
+		}
+	})
 }
 
 func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
@@ -88,6 +117,9 @@ func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 			if _, err := conn.UDP().Write(voice.SilenceAudioFrame); err != nil {
 				panic("error sending silence: " + err.Error())
 			}
+
+			Speakers := make(map[snowflake.ID]*Speaker)
+
 			for {
 				packet, err := conn.UDP().ReadPacket()
 				if err != nil {
@@ -98,14 +130,28 @@ func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 					fmt.Printf("error while reading from reader: %s", err)
 					continue
 				}
-				if _, err = conn.UDP().Write(packet.Opus); err != nil {
-					if errors.Is(err, net.ErrClosed) {
-						println("connection closed")
-						return
-					}
-					fmt.Printf("error while writing to UDPConn: %s", err)
+
+				userID := conn.UserIDBySSRC(packet.SSRC)
+
+				// ignore packets from the bot user itself
+				if userID == client.ID() {
 					continue
 				}
+
+				// create a speaker for the user if one doesn't exist
+				if _, ok := Speakers[userID]; !ok {
+					Speakers[userID] = &Speaker{
+						ID:      userID,
+						Packets: make([]OpusPacket, 0),
+						Mu:      sync.Mutex{},
+					}
+				}
+
+				// add the packet to the speaker
+				Speakers[userID].AddPacket(OpusPacket{
+					Bytes:     packet.Opus,
+					Timestamp: time.Now(),
+				})
 			}
 		}()
 
