@@ -15,8 +15,10 @@ var dg = deepgram.NewClient(os.Getenv("DEEPGRAM_API_KEY"))
 // deepgram s2t sdk
 func NewStream(ctx context.Context, userID string) (*websocket.Conn, error) {
 	ws, _, err := dg.LiveTranscription(deepgram.LiveTranscriptionOptions{
-		Punctuate:       true,
-		Interim_results: true,
+		Punctuate:   true,
+		Encoding:    "opus",
+		Sample_rate: 48000,
+		Channels:    2,
 	})
 
 	if err != nil {
@@ -29,11 +31,13 @@ func NewStream(ctx context.Context, userID string) (*websocket.Conn, error) {
 			_, message, err := ws.ReadMessage()
 			if err != nil {
 				log.Println("Error reading message: ", err)
+				break
 			}
 
 			jsonParsed, jsonErr := gabs.ParseJSON(message)
 			if jsonErr != nil {
 				log.Println("Error parsing json: ", jsonErr)
+				continue
 			}
 			log.Printf("User <%s>: %s", userID, jsonParsed.Path("channel.alternatives.0.transcript").String())
 		}

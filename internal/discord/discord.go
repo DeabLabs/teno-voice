@@ -1,6 +1,7 @@
 package discord
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"github.com/disgoorg/disgo/voice"
 	"github.com/disgoorg/snowflake/v2"
 	"github.com/gorilla/websocket"
+	"mccoy.space/g/ogg"
 )
 
 type JoinRequest struct {
@@ -31,26 +33,24 @@ type CallStatus struct {
 	Err      error
 }
 
-type OpusPacket struct {
-	Bytes     []byte
-	Timestamp time.Time
-}
-
 type Speaker struct {
 	ID                  snowflake.ID
 	transcriptionStream *websocket.Conn
 	Mu                  sync.Mutex
 	StreamContext       context.Context
 	ContextCancel       context.CancelFunc
-	lastPacket          time.Time
-	packetsSent         int
+	buffer              *bytes.Buffer
+	Encoder             *ogg.Encoder
 }
 
 func (s *Speaker) Init() {
 	newContext, cancel := context.WithCancel(context.Background())
 	s.StreamContext = newContext
 	s.ContextCancel = cancel
-	s.packetsSent = 0
+	s.buffer = new(bytes.Buffer)
+	s.Encoder = ogg.NewEncoder(2, s.buffer)
+
+	s.Encoder.EncodeBOS(0, nil)
 
 	wsc, err := speechtotext.NewStream(s.StreamContext, s.ID.String())
 
@@ -59,34 +59,24 @@ func (s *Speaker) Init() {
 	}
 
 	s.transcriptionStream = wsc
+	s.transcriptionStream.WriteMessage(websocket.BinaryMessage, s.buffer.Bytes())
 }
 
 func (s *Speaker) Close() {
+	s.Encoder.EncodeEOS(0, nil)
+	s.transcriptionStream.WriteMessage(websocket.BinaryMessage, s.buffer.Bytes())
+	s.transcriptionStream.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 	s.ContextCancel()
 	s.transcriptionStream.Close()
 }
 
-func (s *Speaker) AddPacket(ctx context.Context, packet OpusPacket) {
+func (s *Speaker) AddPacket(ctx context.Context, packet []byte) {
 	s.Mu.Lock()
-	if s.transcriptionStream != nil {
-		// @TODO potentially buffer multiple packets before shipping them off to dg
-		s.transcriptionStream.WriteMessage(websocket.BinaryMessage, packet.Bytes)
-		s.lastPacket = packet.Timestamp
-		s.packetsSent++
-	}
-	s.Mu.Unlock()
-
-	// after 500 milliseconds, check if the last packet is older than 500 milliseconds
-	// if so, log the length of the packets and clear them
-	// time.AfterFunc(time.Millisecond*500, func() {
-	// 	s.Mu.Lock()
-	// 	defer s.Mu.Unlock()
-	// 	if s.packetsSent > 0 && time.Since(s.lastPacket) > time.Millisecond*500 {
-	// 		fmt.Printf("Speaker %s has %d packets\n", s.ID, s.packetsSent)
-	// 		s.Close()
-	// 		s.Init()
-	// 	}
-	// })
+	defer s.Mu.Unlock()
+	// convert the opus packet to pcm ogg
+	oggEncoder := ogg.NewEncoder(2, s.buffer)
+	oggEncoder.Encode(0, [][]byte{packet})
+	s.transcriptionStream.WriteMessage(websocket.BinaryMessage, s.buffer.Bytes())
 }
 
 func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
@@ -96,6 +86,7 @@ func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 		defer cancel()
 
 		d := make(chan CallStatus, 1)
+		newSpeakerMutex := sync.Mutex{}
 		go func() {
 			client := *dependencies.DiscordClient
 
@@ -171,6 +162,7 @@ func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 				}
 
 				// create a speaker for the user if one doesn't exist
+				newSpeakerMutex.Lock()
 				if _, ok := Speakers[userID]; !ok {
 					s := &Speaker{
 						ID: userID,
@@ -181,12 +173,10 @@ func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 
 					s.Init()
 				}
+				newSpeakerMutex.Unlock()
 
 				// add the packet to the speaker
-				Speakers[userID].AddPacket(ctx, OpusPacket{
-					Bytes:     packet.Opus,
-					Timestamp: time.Now(),
-				})
+				Speakers[userID].AddPacket(ctx, packet.Opus)
 			}
 		}()
 

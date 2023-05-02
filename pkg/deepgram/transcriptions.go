@@ -53,12 +53,5 @@ func (dg *Client) LiveTranscription(options LiveTranscriptionOptions) (*websocke
 		"X-DG-Agent":    []string{dgAgent},
 	}
 
-	// dialer := websocket.Dialer{
-	// 	HandshakeTimeout: time.Duration(10 * time.Second),
-	// 	TLSClientConfig: &tls.Config{
-	// 		InsecureSkipVerify: true,
-	// 	},
-	// }
-
 	return websocket.DefaultDialer.Dial(u.String(), header)
 }

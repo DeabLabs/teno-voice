@@ -53,6 +53,18 @@ TOKEN=<your-discord-bot-token>
 
 Replace `<your-discord-bot-token>` with the token for the Teno Discord bot.
 
+You will also need to setup and configure ngrok in order to run locally with wss and https support
+
+Follow the instructions here: https://ngrok.com/download
+
+Once you have ngrok installed, with your API key configured, run the following command:
+
+```
+ngrok http 8080
+```
+
+This will create a tunnel to your local machine on port 8080.
+
 ## Development
 
 To work on the Teno Voice project, you'll need to have Go installed on your system. Use the following command to run the application in development mode:
