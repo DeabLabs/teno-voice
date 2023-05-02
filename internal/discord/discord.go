@@ -1,7 +1,6 @@
 package discord
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -16,7 +15,6 @@ import (
 	"github.com/disgoorg/disgo/voice"
 	"github.com/disgoorg/snowflake/v2"
 	"github.com/gorilla/websocket"
-	"mccoy.space/g/ogg"
 )
 
 type JoinRequest struct {
@@ -39,18 +37,12 @@ type Speaker struct {
 	Mu                  sync.Mutex
 	StreamContext       context.Context
 	ContextCancel       context.CancelFunc
-	buffer              *bytes.Buffer
-	Encoder             *ogg.Encoder
 }
 
 func (s *Speaker) Init() {
 	newContext, cancel := context.WithCancel(context.Background())
 	s.StreamContext = newContext
 	s.ContextCancel = cancel
-	s.buffer = new(bytes.Buffer)
-	s.Encoder = ogg.NewEncoder(2, s.buffer)
-
-	s.Encoder.EncodeBOS(0, nil)
 
 	wsc, err := speechtotext.NewStream(s.StreamContext, s.ID.String())
 
@@ -59,12 +51,10 @@ func (s *Speaker) Init() {
 	}
 
 	s.transcriptionStream = wsc
-	s.transcriptionStream.WriteMessage(websocket.BinaryMessage, s.buffer.Bytes())
+	s.transcriptionStream.WriteMessage(websocket.BinaryMessage, voice.SilenceAudioFrame)
 }
 
 func (s *Speaker) Close() {
-	s.Encoder.EncodeEOS(0, nil)
-	s.transcriptionStream.WriteMessage(websocket.BinaryMessage, s.buffer.Bytes())
 	s.transcriptionStream.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 	s.ContextCancel()
 	s.transcriptionStream.Close()
@@ -74,9 +64,7 @@ func (s *Speaker) AddPacket(ctx context.Context, packet []byte) {
 	s.Mu.Lock()
 	defer s.Mu.Unlock()
 	// convert the opus packet to pcm ogg
-	oggEncoder := ogg.NewEncoder(2, s.buffer)
-	oggEncoder.Encode(0, [][]byte{packet})
-	s.transcriptionStream.WriteMessage(websocket.BinaryMessage, s.buffer.Bytes())
+	s.transcriptionStream.WriteMessage(websocket.BinaryMessage, packet)
 }
 
 func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
