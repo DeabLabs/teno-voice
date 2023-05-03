@@ -30,6 +30,15 @@ type Voice struct {
 	Text    string   `xml:",chardata"`
 }
 
+type ReadCloserWrapper struct {
+    io.Reader
+    Closer func() error
+}
+
+func (w *ReadCloserWrapper) Close() error {
+    return w.Closer()
+}
+
 func getAccessToken() (string, error) {
 	client := &http.Client{}
 	req, err := http.NewRequest("POST", tokenEndpoint, nil)
@@ -52,7 +61,7 @@ func getAccessToken() (string, error) {
 	return string(token), nil
 }
 
-func TextToSpeech(text string) ([]byte, error) {
+func TextToSpeech(text string) (*ReadCloserWrapper, error) {
 	token, err := getAccessToken()
 	if err != nil {
 		return nil, err
@@ -83,23 +92,22 @@ func TextToSpeech(text string) ([]byte, error) {
 	req.Header.Add("Authorization", "Bearer "+token)
 	req.Header.Add("Content-Type", "application/ssml+xml")
 	req.Header.Add("User-Agent", "AzureTextToSpeech")
-	req.Header.Add("X-Microsoft-OutputFormat", "raw-48khz-16bit-mono-pcm")
-	// req.Header.Add("X-Microsoft-OutputFormat", "ogg-48khz-16bit-mono-opus")
+	// req.Header.Add("X-Microsoft-OutputFormat", "raw-48khz-16bit-mono-pcm")
+	req.Header.Add("X-Microsoft-OutputFormat", "ogg-48khz-16bit-mono-opus")
 
 	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
+    if err != nil {
+        return nil, err
+    }
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
+    if resp.StatusCode != http.StatusOK {
+        return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+    }
 
-	audioData, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	return audioData, nil
+    return &ReadCloserWrapper{
+        Reader: resp.Body,
+        Closer: func() error {
+            return resp.Body.Close()
+        },
+    }, nil
 }

@@ -136,11 +136,12 @@ func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 			playAudioChannel := make(chan []byte)
 
 			// Create responder
-			responder := responder.NewResponder(&playAudioChannel)
+			responder := responder.NewResponder(playAudioChannel)
 
 			// Loop that listens to the audio bytes channel and writes them to the Discord voice connection
 			go func() {
 				for audioBytes := range playAudioChannel {
+					// fmt.Printf("Sending %d bytes of audio data\n", len(audioBytes))
 					if _, err := conn.UDP().Write(audioBytes); err != nil {
 						fmt.Printf("error sending audio bytes: %s", err)
 					}
