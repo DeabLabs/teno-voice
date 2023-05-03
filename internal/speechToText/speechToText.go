@@ -13,7 +13,7 @@ import (
 var dg = deepgram.NewClient(os.Getenv("DEEPGRAM_API_KEY"))
 
 // deepgram s2t sdk
-func NewStream(ctx context.Context, userID string) (*websocket.Conn, error) {
+func NewStream(ctx context.Context, onClose func(), userID string) (*websocket.Conn, error) {
 	ws, _, err := dg.LiveTranscription(deepgram.LiveTranscriptionOptions{
 		Punctuate:   true,
 		Encoding:    "opus",
@@ -28,18 +28,28 @@ func NewStream(ctx context.Context, userID string) (*websocket.Conn, error) {
 
 	go func() {
 		for {
-			_, message, err := ws.ReadMessage()
-			if err != nil {
-				log.Println("Error reading message: ", err)
-				break
-			}
+			select {
+			default:
+				_, message, err := ws.ReadMessage()
+				if err != nil {
+					log.Println("Error reading message: ", err)
+					// TODO I think we actually want to signal over a channel that this stream is toast
+					// then we want to setup a new stream and channel for the user
+					// killing the context may also be helpful, I'm not sure yet
+					ctx.Done()
+					break
+				}
 
-			jsonParsed, jsonErr := gabs.ParseJSON(message)
-			if jsonErr != nil {
-				log.Println("Error parsing json: ", jsonErr)
-				continue
+				jsonParsed, jsonErr := gabs.ParseJSON(message)
+				if jsonErr != nil {
+					log.Println("Error parsing json: ", jsonErr)
+					continue
+				}
+
+				log.Printf("User <%s>: %s", userID, jsonParsed.Path("channel.alternatives.0.transcript").String())
+			case <-ctx.Done():
+				log.Println("Context cancelled")
 			}
-			log.Printf("User <%s>: %s", userID, jsonParsed.Path("channel.alternatives.0.transcript").String())
 		}
 	}()
 

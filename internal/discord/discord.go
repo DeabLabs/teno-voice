@@ -44,7 +44,7 @@ func (s *Speaker) Init() {
 	s.StreamContext = newContext
 	s.ContextCancel = cancel
 
-	wsc, err := speechtotext.NewStream(s.StreamContext, s.ID.String())
+	wsc, err := speechtotext.NewStream(s.StreamContext, s.Close, s.ID.String())
 
 	if err != nil {
 		panic("error getting transcription stream: " + err.Error())
