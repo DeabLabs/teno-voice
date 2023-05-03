@@ -2,6 +2,7 @@ package transcript
 
 import (
 	"strings"
+	"time"
 )
 
 type Transcript struct {
@@ -14,8 +15,9 @@ func NewTranscript() *Transcript {
 	}
 }
 
-func (t *Transcript) AddLine(line string) error {
-	t.lines = append(t.lines, line)
+func (t *Transcript) AddLine(startTime time.Time, userId string, transcription string) error {
+	formattedLine := formatLine(startTime, userId, transcription)
+	t.lines = append(t.lines, formattedLine)
 
 	return nil
 }
@@ -32,4 +34,8 @@ func (t *Transcript) GetRecentLines(numLines int) string {
 
 	lines := t.lines[len(t.lines)-numLines:]
 	return strings.Join(lines, "\n")
+}
+
+func formatLine(startTime time.Time, userId string, line string) string {
+	return startTime.Format("15:04:05") + " " + userId + ": " + line
 }

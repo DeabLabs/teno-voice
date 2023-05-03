@@ -12,6 +12,7 @@ import (
 	"com.deablabs.teno-voice/internal/llm"
 	"com.deablabs.teno-voice/internal/textToSpeech/azure"
 	"com.deablabs.teno-voice/internal/transcript"
+	"com.deablabs.teno-voice/internal/utterance"
 )
 
 type Responder struct {
@@ -26,13 +27,9 @@ func NewResponder(playAudioChannel *chan []byte) *Responder {
 	}
 }
 
-func (r *Responder) NewTranscription(line string) {
-	r.transcript.AddLine(line)
+func (r *Responder) UtteranceTranscribed(utterance *utterance.Utterance) {
+	r.transcript.AddLine(utterance.GetStartTime(), utterance.GetUserId(), utterance.GetTranscription())
 	r.Respond()
-}
-
-func (r *Responder) GetTranscript() *transcript.Transcript {
-	return r.transcript
 }
 
 func (r *Responder) Respond() {
