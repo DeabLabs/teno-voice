@@ -1,32 +1,35 @@
 package transcript
 
 import (
-	azure "com.deablabs.teno-voice/internal/textToSpeech/azure"
+	"strings"
 )
 
 type Transcript struct {
 	lines           []string
-	audioBytesChannel chan []byte
 }
 
-func NewTranscript(audioBytesChannel chan []byte) *Transcript {
+func NewTranscript() *Transcript {
 	return &Transcript{
 		lines:           make([]string, 0),
-		audioBytesChannel: audioBytesChannel,
 	}
 }
 
 func (t *Transcript) AddLine(line string) error {
 	t.lines = append(t.lines, line)
-	audioBytes, err := azure.TextToSpeech(line)
-	if err != nil {
-		return err
-	}
 
-	t.audioBytesChannel <- audioBytes
 	return nil
 }
 
 func (t *Transcript) GetTranscript() []string {
 	return t.lines
+}
+
+// Get recent lines as a string separated by newlines
+func (t *Transcript) GetRecentLines(numLines int) string {
+	if numLines > len(t.lines) {
+		numLines = len(t.lines)
+	}
+
+	lines := t.lines[len(t.lines)-numLines:]
+	return strings.Join(lines, "\n")
 }

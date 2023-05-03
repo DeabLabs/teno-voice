@@ -5,7 +5,7 @@ import (
 	"log"
 	"os"
 
-	"com.deablabs.teno-voice/internal/transcript"
+	"com.deablabs.teno-voice/internal/responder"
 	"com.deablabs.teno-voice/pkg/deepgram"
 	"github.com/Jeffail/gabs/v2"
 	"github.com/gorilla/websocket"
@@ -14,7 +14,7 @@ import (
 var dg = deepgram.NewClient(os.Getenv("DEEPGRAM_API_KEY"))
 
 // deepgram s2t sdk
-func NewStream(ctx context.Context, onClose func(), transcript transcript.Transcript, userID string) (*websocket.Conn, error) {
+func NewStream(ctx context.Context, onClose func(), responder *responder.Responder, userID string) (*websocket.Conn, error) {
 	ws, _, err := dg.LiveTranscription(deepgram.LiveTranscriptionOptions{
 		Punctuate:   true,
 		Encoding:    "opus",
@@ -48,7 +48,7 @@ func NewStream(ctx context.Context, onClose func(), transcript transcript.Transc
 				} 
 				transcription := jsonParsed.Path("channel.alternatives.0.transcript").String()
 
-				transcript.AddLine(transcription)
+				responder.NewTranscription(transcription)
 
 				log.Printf("User <%s>: %s", userID, transcription)
 			case <-ctx.Done():

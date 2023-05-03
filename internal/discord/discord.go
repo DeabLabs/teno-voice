@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"com.deablabs.teno-voice/internal/deps"
+	"com.deablabs.teno-voice/internal/responder"
 	speechtotext "com.deablabs.teno-voice/internal/speechToText"
-	transcript "com.deablabs.teno-voice/internal/transcript"
 	"com.deablabs.teno-voice/pkg/helpers"
 	"github.com/disgoorg/disgo/voice"
 	"github.com/disgoorg/snowflake/v2"
@@ -40,12 +40,12 @@ type Speaker struct {
 	ContextCancel       context.CancelFunc
 }
 
-func (s *Speaker) Init(ctx context.Context, transcript *transcript.Transcript) {
+func (s *Speaker) Init(ctx context.Context, responder *responder.Responder) {
 	newContext, cancel := context.WithCancel(context.Background())
 	s.StreamContext = newContext
 	s.ContextCancel = cancel
 
-	wsc, err := speechtotext.NewStream(s.StreamContext, s.Close, *transcript, s.ID.String())
+	wsc, err := speechtotext.NewStream(s.StreamContext, s.Close, responder, s.ID.String())
 
 	if err != nil {
 		panic("error getting transcription stream: " + err.Error())
@@ -132,15 +132,15 @@ func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 
 			Speakers := make(map[snowflake.ID]*Speaker)
 
-			// Create a buffered channel for audio bytes
-			audioBytesChannel := make(chan []byte)
+			// Create a buffered channel for audio bytes to be played in the discord voice call
+			playAudioChannel := make(chan []byte)
 
-			// Create transcript
-			transcript := transcript.NewTranscript(audioBytesChannel)
+			// Create responder
+			responder := responder.NewResponder(&playAudioChannel)
 
 			// Loop that listens to the audio bytes channel and writes them to the Discord voice connection
 			go func() {
-				for audioBytes := range audioBytesChannel {
+				for audioBytes := range playAudioChannel {
 					if _, err := conn.UDP().Write(audioBytes); err != nil {
 						fmt.Printf("error sending audio bytes: %s", err)
 					}
@@ -175,7 +175,7 @@ func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 
 					Speakers[userID] = s
 
-					s.Init(ctx, transcript)
+					s.Init(ctx, responder)
 				}
 				newSpeakerMutex.Unlock()
 
