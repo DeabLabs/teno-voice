@@ -131,6 +131,9 @@ func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 
 			Speakers := make(map[snowflake.ID]*Speaker)
 
+			// TODO: Responder struct that is initialized with conn and a channel to receive audio packets from,
+			// and when audio packets come, we send them to the conn
+
 			for {
 				packet, err := conn.UDP().ReadPacket()
 				if err != nil {
