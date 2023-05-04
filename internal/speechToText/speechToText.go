@@ -33,29 +33,39 @@ func NewStream(ctx context.Context, onClose func(), responder *responder.Respond
 			default:
 				_, message, err := ws.ReadMessage()
 				if err != nil {
-					log.Println("Error reading message: ", err)
-					// TODO I think we actually want to signal over a channel that this stream is toast
-					// then we want to setup a new stream and channel for the user
-					// killing the context may also be helpful, I'm not sure yet
+					log.Println("Deepgram stream closed: ", err)
+	
+					// Check if the error is one of the handled timeout errors or payload error
+					if websocket.IsCloseError(err, 1011, 1008) {
+						onClose()
+					}
+	
 					ctx.Done()
-					break
+					return // Change this line
 				}
 	
 				jsonParsed, jsonErr := gabs.ParseJSON(message)
 				if jsonErr != nil {
 					log.Println("Error parsing json: ", jsonErr)
 					continue
-				} 
-				transcription := jsonParsed.Path("channel.alternatives.0.transcript").String()
+				}
 
-				responder.NewTranscription(transcription)
+				// log.Printf("Full Deepgram response: %s", jsonParsed.String())
 
-				log.Printf("User <%s>: %s", userID, transcription)
+				transcription, ok := jsonParsed.Path("channel.alternatives.0.transcript").Data().(string)
+				
+				if ok && transcription != "" {
+    				responder.NewTranscription(transcription)
+    				log.Printf("User <%s>: %s", userID, transcription)
+				}
+
 			case <-ctx.Done():
 				log.Println("Context cancelled")
 			}
 		}
 	}()
+	
+	
 	
 
 	return ws, err

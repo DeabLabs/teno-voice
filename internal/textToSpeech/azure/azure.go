@@ -72,7 +72,7 @@ func TextToSpeech(text string) (*ReadCloserWrapper, error) {
 		Lang:    "en-US",
 		Voice: Voice{
 			Lang:   "en-US",
-			Name:   "en-US-ChristopherNeural",
+			Name:   "en-US-BrandonNeural",
 			Gender: "Male",
 			Text:   text,
 		},
@@ -92,7 +92,6 @@ func TextToSpeech(text string) (*ReadCloserWrapper, error) {
 	req.Header.Add("Authorization", "Bearer "+token)
 	req.Header.Add("Content-Type", "application/ssml+xml")
 	req.Header.Add("User-Agent", "AzureTextToSpeech")
-	// req.Header.Add("X-Microsoft-OutputFormat", "raw-48khz-16bit-mono-pcm")
 	req.Header.Add("X-Microsoft-OutputFormat", "ogg-48khz-16bit-mono-opus")
 
 	resp, err := client.Do(req)

@@ -56,6 +56,8 @@ func (r *Responder) playTextInVoiceChannel(line string) {
             return
         }
 
+		// TODO try bundling packets instead of sending them individually
+
         // Extract raw Opus packets from each page
         for _, packet := range page.Packets {
             r.playAudioChannel <- packet

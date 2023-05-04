@@ -38,12 +38,16 @@ type Speaker struct {
 	Mu                  sync.Mutex
 	StreamContext       context.Context
 	ContextCancel       context.CancelFunc
+	StreamActive        bool
+	responder           *responder.Responder
 }
+
 
 func (s *Speaker) Init(ctx context.Context, responder *responder.Responder) {
 	newContext, cancel := context.WithCancel(context.Background())
 	s.StreamContext = newContext
 	s.ContextCancel = cancel
+	s.responder = responder
 
 	wsc, err := speechtotext.NewStream(s.StreamContext, s.Close, responder, s.ID.String())
 
@@ -53,20 +57,30 @@ func (s *Speaker) Init(ctx context.Context, responder *responder.Responder) {
 
 	s.transcriptionStream = wsc
 	s.transcriptionStream.WriteMessage(websocket.BinaryMessage, voice.SilenceAudioFrame)
+	s.StreamActive = true
 }
+
 
 func (s *Speaker) Close() {
 	s.transcriptionStream.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 	s.ContextCancel()
 	s.transcriptionStream.Close()
+	s.StreamActive = false
 }
+
 
 func (s *Speaker) AddPacket(ctx context.Context, packet []byte) {
 	s.Mu.Lock()
 	defer s.Mu.Unlock()
+
+	if !s.StreamActive {
+		s.Init(ctx, s.responder)
+	}
+
 	// convert the opus packet to pcm ogg
 	s.transcriptionStream.WriteMessage(websocket.BinaryMessage, packet)
 }
+
 
 func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
