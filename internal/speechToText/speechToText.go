@@ -8,18 +8,20 @@ import (
 	"com.deablabs.teno-voice/internal/responder"
 	"com.deablabs.teno-voice/pkg/deepgram"
 	"github.com/Jeffail/gabs/v2"
+	"github.com/disgoorg/snowflake/v2"
 	"github.com/gorilla/websocket"
 )
 
 var dg = deepgram.NewClient(os.Getenv("DEEPGRAM_API_KEY"))
 
 // deepgram s2t sdk
-func NewStream(ctx context.Context, onClose func(), responder *responder.Responder, userID string) (*websocket.Conn, error) {
+func NewStream(ctx context.Context, onClose func(), responder *responder.Responder, userID snowflake.ID) (*websocket.Conn, error) {
 	ws, _, err := dg.LiveTranscription(deepgram.LiveTranscriptionOptions{
 		Punctuate:   true,
 		Encoding:    "opus",
 		Sample_rate: 48000,
 		Channels:    2,
+		Interim_results: true,
 	})
 
 	if err != nil {
@@ -54,9 +56,17 @@ func NewStream(ctx context.Context, onClose func(), responder *responder.Respond
 
 				transcription, ok := jsonParsed.Path("channel.alternatives.0.transcript").Data().(string)
 				
+				// If the transcription isn't empty, and the transcription isn't final, update the user's speaking state and send the transcription to the responder if it's final
 				if ok && transcription != "" {
-    				responder.NewTranscription(transcription)
-    				log.Printf("User <%s>: %s", userID, transcription)
+					if !jsonParsed.Path("is_final").Data().(bool) {
+						responder.UpdateUserSpeakingState(userID, true)
+					} else {
+						responder.UpdateUserSpeakingState(userID, false)
+    					responder.NewTranscription(transcription)
+    					log.Printf("User <%s>: %s", userID.String(), transcription)
+					}
+					// Print whether anyone is currently speaking
+					log.Printf("Speaking state: %t", responder.IsAnyUserSpeaking())
 				}
 
 			case <-ctx.Done():

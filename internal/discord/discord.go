@@ -49,7 +49,7 @@ func (s *Speaker) Init(ctx context.Context, responder *responder.Responder) {
 	s.ContextCancel = cancel
 	s.responder = responder
 
-	wsc, err := speechtotext.NewStream(s.StreamContext, s.Close, responder, s.ID.String())
+	wsc, err := speechtotext.NewStream(s.StreamContext, s.Close, responder, s.ID)
 
 	if err != nil {
 		panic("error getting transcription stream: " + err.Error())
@@ -80,7 +80,6 @@ func (s *Speaker) AddPacket(ctx context.Context, packet []byte) {
 	// convert the opus packet to pcm ogg
 	s.transcriptionStream.WriteMessage(websocket.BinaryMessage, packet)
 }
-
 
 func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -5,26 +5,74 @@ import (
 	// "errors"
 	"fmt"
 	"io"
+	"sync"
 
 	// "strings"
 
 	// "com.deablabs.teno-voice/internal/llm"
 	"com.deablabs.teno-voice/internal/textToSpeech/azure"
 	"com.deablabs.teno-voice/internal/transcript"
+	"github.com/disgoorg/snowflake/v2"
 	"mccoy.space/g/ogg"
 )
 
-type Responder struct {
-	transcript *transcript.Transcript
-	playAudioChannel chan []byte
+type UserSpeakingState struct {
+	UserID    snowflake.ID
+	IsSpeaking bool
 }
 
+type Responder struct {
+	transcript        *transcript.Transcript
+	playAudioChannel  chan []byte
+	speakingStateChan chan UserSpeakingState
+	speakingUsers     map[snowflake.ID]bool
+	speakingUsersMu   sync.Mutex
+}
+
+
 func NewResponder(playAudioChannel chan []byte) *Responder {
-	return &Responder{
-		playAudioChannel: playAudioChannel,
-		transcript: transcript.NewTranscript(),
+	responder := &Responder{
+		playAudioChannel:  playAudioChannel,
+		transcript:        transcript.NewTranscript(),
+		speakingStateChan: make(chan UserSpeakingState),
+		speakingUsers:     make(map[snowflake.ID]bool),
+	}
+
+	go responder.listenForSpeakingState()
+
+	return responder
+}
+
+func (r *Responder) UpdateUserSpeakingState(userID snowflake.ID, isSpeaking bool) {
+	r.speakingStateChan <- UserSpeakingState{
+		UserID:    userID,
+		IsSpeaking: isSpeaking,
 	}
 }
+
+func (r *Responder) listenForSpeakingState() {
+	for state := range r.speakingStateChan {
+		r.speakingUsersMu.Lock()
+		r.speakingUsers[state.UserID] = state.IsSpeaking
+		r.speakingUsersMu.Unlock()
+
+		// If a user is speaking, stop playing audio
+	}
+}
+
+func (r *Responder) IsAnyUserSpeaking() bool {
+	r.speakingUsersMu.Lock()
+	defer r.speakingUsersMu.Unlock()
+
+	for _, isSpeaking := range r.speakingUsers {
+		if isSpeaking {
+			return true
+		}
+	}
+
+	return false
+}
+
 
 func (r *Responder) NewTranscription(line string) {
 	r.transcript.AddLine(line)
@@ -64,8 +112,6 @@ func (r *Responder) playTextInVoiceChannel(line string) {
         }
     }
 }
-
-
 
 func (r *Responder) GetTranscript() *transcript.Transcript {
 	return r.transcript
