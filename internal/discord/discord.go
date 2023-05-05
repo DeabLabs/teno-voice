@@ -44,6 +44,9 @@ type Speaker struct {
 	responder           *responder.Responder
 }
 
+var connectionsMutex sync.Mutex
+var connections = make(map[snowflake.ID]voice.Conn)
+
 func (s *Speaker) Init(ctx context.Context, responder *responder.Responder) {
 	newContext, cancel := context.WithCancel(context.Background())
 	s.StreamContext = newContext
@@ -106,7 +109,8 @@ func decodeAndValidateRequest(w http.ResponseWriter, r *http.Request) (snowflake
 	return guildID, channelID, nil
 }
 
-func setupVoiceConnection(ctx context.Context, client bot.Client, guildID, channelID snowflake.ID) (voice.Conn, error) {
+func setupVoiceConnection(ctx context.Context, clientAdress *bot.Client, guildID, channelID snowflake.ID) (voice.Conn, error) {
+	client := *clientAdress
 	conn := client.VoiceManager().CreateConn(guildID)
 
 	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
@@ -118,7 +122,8 @@ func setupVoiceConnection(ctx context.Context, client bot.Client, guildID, chann
 	return conn, nil
 }
 
-func writeToVoiceConnection(conn voice.Conn, playAudioChannel chan []byte) {
+func writeToVoiceConnection(connection *voice.Conn, playAudioChannel chan []byte) {
+	conn := *connection
 	for audioBytes := range playAudioChannel {
 		if _, err := conn.UDP().Write(audioBytes); err != nil {
 			fmt.Printf("error sending audio bytes: %s", err)
@@ -126,7 +131,10 @@ func writeToVoiceConnection(conn voice.Conn, playAudioChannel chan []byte) {
 	}
 }
 
-func handleIncomingPackets(ctx context.Context, client bot.Client, conn voice.Conn, speakers map[snowflake.ID]*Speaker, newSpeakerMutex *sync.Mutex, responder *responder.Responder) {
+func handleIncomingPackets(ctx context.Context, clientAdress *bot.Client, connection *voice.Conn, speakers map[snowflake.ID]*Speaker, newSpeakerMutex *sync.Mutex, responder *responder.Responder) {
+	conn := *connection
+	client := *clientAdress
+
 	for {
 		packet, err := conn.UDP().ReadPacket()
 		if err != nil {
@@ -177,17 +185,17 @@ func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 		}
 
 		client := *dependencies.DiscordClient
-		conn, err := setupVoiceConnection(ctx, client, guildID, channelID)
+		conn, err := setupVoiceConnection(ctx, &client, guildID, channelID)
+
 		if err != nil {
 			w.Write([]byte(fmt.Sprintf("Could not join voice call: %s", err.Error())))
 			return
 		}
 
-		defer func() {
-			ctx2, cancel2 := context.WithTimeout(context.Background(), time.Second*10)
-			defer cancel2()
-			conn.Close(ctx2)
-		}()
+		// Store the connection in the connections map.
+		connectionsMutex.Lock()
+		connections[guildID] = conn
+		connectionsMutex.Unlock()
 
 		if err := conn.SetSpeaking(ctx, voice.SpeakingFlagMicrophone); err != nil {
 			panic("error setting speaking flag: " + err.Error())
@@ -202,10 +210,19 @@ func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 		azureTTS := &azure.AzureTTS{}
 		responder := responder.NewResponder(playAudioChannel, azureTTS)
 
-		go writeToVoiceConnection(conn, playAudioChannel)
+		go writeToVoiceConnection(&conn, playAudioChannel)
 
 		newSpeakerMutex := sync.Mutex{}
-		handleIncomingPackets(ctx, client, conn, Speakers, &newSpeakerMutex, responder)
+		go handleIncomingPackets(ctx, &client, &conn, Speakers, &newSpeakerMutex, responder)
+
+		// Create a channel to wait for a signal to close the connection.
+		closeSignal := make(chan struct{})
+		go func() {
+			<-closeSignal
+			ctx2, cancel2 := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel2()
+			conn.Close(ctx2)
+		}()
 
 		w.Write([]byte("Joined voice call"))
 	})
@@ -243,6 +260,25 @@ func LeaveVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 		defer cancel()
+		conn.Close(ctx)
+
+		connectionsMutex.Lock()
+		conn, ok := connections[guildID]
+		if !ok {
+			connectionsMutex.Unlock()
+			w.Write([]byte("Not in voice call"))
+			return
+		}
+
+		// Remove the connection from the connections map.
+		delete(connections, guildID)
+		connectionsMutex.Unlock()
+
+		ctx2, cancel2 := context.WithTimeout(context.Background(), time.Second*10)
+		defer cancel2()
+		conn.Close(ctx2)
+
+		// close the connection.
 		conn.Close(ctx)
 
 		w.Write([]byte("Left voice call"))

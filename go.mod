@@ -4,16 +4,13 @@ go 1.20
 
 require (
 	github.com/Jeffail/gabs/v2 v2.7.0
+	github.com/Netflix/go-env v0.0.0-20220526054621-78278af1949d
 	github.com/disgoorg/disgo v0.16.3
 	github.com/disgoorg/log v1.2.0
 	github.com/disgoorg/snowflake/v2 v2.0.1
 	github.com/go-chi/chi v1.5.4
 	github.com/joho/godotenv v1.5.1
-)
-
-require (
-	github.com/Netflix/go-env v0.0.0-20220526054621-78278af1949d // indirect
-	mccoy.space/g/ogg v0.0.0-20221103053400-1ea94e6f3152 // indirect
+	mccoy.space/g/ogg v0.0.0-20221103053400-1ea94e6f3152
 )
 
 require (
