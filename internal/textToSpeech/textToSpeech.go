@@ -1,4 +1,8 @@
 package texttospeech
 
-// azure tts sdk
-// https://learn.microsoft.com/en-us/azure/cognitive-services/speech-service/get-started-text-to-speech?pivots=programming-language-go&tabs=macos%2Cterminal
+import "io"
+
+// TextToSpeech is an interface for text to speech services, it has a method GenerateSpeech which returns a stream of opus packets
+type TextToSpeech interface {
+	GenerateSpeech(text string) (io.ReadCloser, error)
+}

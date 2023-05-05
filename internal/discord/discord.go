@@ -42,7 +42,6 @@ type Speaker struct {
 	responder           *responder.Responder
 }
 
-
 func (s *Speaker) Init(ctx context.Context, responder *responder.Responder) {
 	newContext, cancel := context.WithCancel(context.Background())
 	s.StreamContext = newContext
@@ -60,14 +59,12 @@ func (s *Speaker) Init(ctx context.Context, responder *responder.Responder) {
 	s.StreamActive = true
 }
 
-
 func (s *Speaker) Close() {
 	s.transcriptionStream.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 	s.ContextCancel()
 	s.transcriptionStream.Close()
 	s.StreamActive = false
 }
-
 
 func (s *Speaker) AddPacket(ctx context.Context, packet []byte) {
 	s.Mu.Lock()

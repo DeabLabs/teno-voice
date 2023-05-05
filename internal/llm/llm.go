@@ -8,7 +8,7 @@ import (
 )
 
 func GetTranscriptResponseStream(transcript string, service string, model string) (*goOpenai.ChatCompletionStream, error) {
-    prompt := "The following is the transcript of a voice call. You are a freindly conversation bot. Your response will be played through a text-to-speech system in the voice call. \n\n" + transcript + "\n\n" + "Respond with your own message, it should be at least 3 sentences:"
+    prompt := "The following is the transcript of a voice call. You are a friendly conversation bot. Your response will be played through a text-to-speech system in the voice call. \n\n" + transcript + "\n\n" + "Respond with your contribution to the conversation:"
 
 	switch service {
 	case "openai":

@@ -35,7 +35,7 @@ func NewStream(ctx context.Context, onClose func(), responder *responder.Respond
 			default:
 				_, message, err := ws.ReadMessage()
 				if err != nil {
-					log.Println("Deepgram stream closed: ", err)
+					// log.Println("Deepgram stream closed: ", err)
 	
 					// Check if the error is one of the handled timeout errors or payload error
 					if websocket.IsCloseError(err, 1011, 1008) {
@@ -63,10 +63,10 @@ func NewStream(ctx context.Context, onClose func(), responder *responder.Respond
 					} else {
 						responder.UpdateUserSpeakingState(userID, false)
     					responder.NewTranscription(transcription)
-    					log.Printf("User <%s>: %s", userID.String(), transcription)
+    					// log.Printf("User <%s>: %s", userID.String(), transcription)
 					}
 					// Print whether anyone is currently speaking
-					log.Printf("Speaking state: %t", responder.IsAnyUserSpeaking())
+					//log.Printf("Speaking state: %t", responder.IsAnyUserSpeaking())
 				}
 
 			case <-ctx.Done():
