@@ -16,10 +16,9 @@ import (
 
 	// "com.deablabs.teno-voice/internal/llm"
 	"com.deablabs.teno-voice/internal/llm"
-	"com.deablabs.teno-voice/internal/textToSpeech/azure"
+	texttospeech "com.deablabs.teno-voice/internal/textToSpeech"
 	"com.deablabs.teno-voice/internal/transcript"
 	"github.com/disgoorg/snowflake/v2"
-	"mccoy.space/g/ogg"
 )
 
 type UserSpeakingState struct {
@@ -29,7 +28,7 @@ type UserSpeakingState struct {
 
 type audioStreamWithIndex struct {
 	index       int
-	audioStream *azure.ReadCloserWrapper
+	opusPackets <-chan []byte
 }
 
 type Responder struct {
@@ -40,9 +39,10 @@ type Responder struct {
 	speakingUsers     map[snowflake.ID]bool
 	speakingUsersMu   sync.Mutex
 	sentenceChan      chan string
+	ttsService        texttospeech.TextToSpeechService
 }
 
-func NewResponder(playAudioChannel chan []byte) *Responder {
+func NewResponder(playAudioChannel chan []byte, ttsService texttospeech.TextToSpeechService) *Responder {
 	responder := &Responder{
 		playAudioChannel:  playAudioChannel,
 		sentenceChan:      make(chan string, 100),
@@ -50,6 +50,7 @@ func NewResponder(playAudioChannel chan []byte) *Responder {
 		transcript:        transcript.NewTranscript(),
 		speakingStateChan: make(chan UserSpeakingState),
 		speakingUsers:     make(map[snowflake.ID]bool),
+		ttsService:        ttsService,
 	}
 
 	go responder.listenForSpeakingState()
@@ -70,54 +71,35 @@ func (r *Responder) synthesizeSentences() {
 	sentenceIndex := 0
 	for sentence := range r.sentenceChan {
 		log.Printf("Synthesizing sentence: %s\n", sentence)
-		audioReader, err := azure.TextToSpeech(sentence)
+		opusPackets, err := r.ttsService.Synthesize(sentence)
 		if err != nil {
 			fmt.Printf("Error generating speech: %v\n", err)
 			continue
 		}
 		r.audioStreamChan <- audioStreamWithIndex{
 			index:       sentenceIndex,
-			audioStream: audioReader,
+			opusPackets: opusPackets,
 		}
 		sentenceIndex++
 	}
 }
 
 func (r *Responder) playSynthesizedSentences() {
-	audioStreamMap := make(map[int]*azure.ReadCloserWrapper)
+	audioStreamMap := make(map[int]<-chan []byte)
 	nextAudioIndex := 0
 
 	for audioStreamWithIndex := range r.audioStreamChan {
-		audioStreamMap[audioStreamWithIndex.index] = audioStreamWithIndex.audioStream
+		audioStreamMap[audioStreamWithIndex.index] = audioStreamWithIndex.opusPackets
 
 		for {
-			audioReader, ok := audioStreamMap[nextAudioIndex]
+			opusPackets, ok := audioStreamMap[nextAudioIndex]
 			if !ok {
 				break
 			}
 
-			// Create a new Ogg Decoder
-			decoder := ogg.NewDecoder(audioReader.Reader)
-
-			for {
-				// Decode Ogg pages
-				page, err := decoder.Decode()
-				if err != nil {
-					if err == io.EOF {
-						break
-					}
-					fmt.Printf("Error decoding Ogg page: %s\n", err)
-					return
-				}
-
-				// Extract raw Opus packets from each page and send them to the playAudioChannel
-				for _, packet := range page.Packets {
-					r.playAudioChannel <- packet
-				}
+			for packet := range opusPackets {
+				r.playAudioChannel <- packet
 			}
-
-			// Close the audio stream
-			audioReader.Close()
 
 			// Remove the played audio stream from the map and increment the nextAudioIndex
 			delete(audioStreamMap, nextAudioIndex)
@@ -152,39 +134,6 @@ func (r *Responder) IsAnyUserSpeaking() bool {
 func (r *Responder) NewTranscription(line string) {
 	r.transcript.AddLine(line)
 	r.Respond()
-}
-
-// Play a line of text as audio
-func (r *Responder) playTextInVoiceChannel(line string) {
-	fmt.Printf("Playing line: %s\n", line)
-	audioReader, err := azure.TextToSpeech(line)
-	if err != nil {
-		fmt.Printf("Error generating speech: %v", err)
-		return
-	}
-	defer audioReader.Close()
-
-	// Create a new Ogg Decoder
-	decoder := ogg.NewDecoder(audioReader)
-
-	for {
-		// Decode Ogg pages
-		page, err := decoder.Decode()
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			fmt.Printf("Error decoding Ogg page: %s", err)
-			return
-		}
-
-		// TODO try bundling packets instead of sending them individually
-
-		// Extract raw Opus packets from each page
-		for _, packet := range page.Packets {
-			r.playAudioChannel <- packet
-		}
-	}
 }
 
 func (r *Responder) GetTranscript() *transcript.Transcript {

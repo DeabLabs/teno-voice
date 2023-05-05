@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	"mccoy.space/g/ogg"
 )
 
 const (
@@ -30,14 +32,7 @@ type Voice struct {
 	Text    string   `xml:",chardata"`
 }
 
-type ReadCloserWrapper struct {
-    io.Reader
-    Closer func() error
-}
-
-func (w *ReadCloserWrapper) Close() error {
-    return w.Closer()
-}
+type AzureTTS struct{}
 
 func getAccessToken() (string, error) {
 	client := &http.Client{}
@@ -61,7 +56,7 @@ func getAccessToken() (string, error) {
 	return string(token), nil
 }
 
-func TextToSpeech(text string) (*ReadCloserWrapper, error) {
+func (a *AzureTTS) Synthesize(text string) (<-chan []byte, error) {
 	token, err := getAccessToken()
 	if err != nil {
 		return nil, err
@@ -95,18 +90,51 @@ func TextToSpeech(text string) (*ReadCloserWrapper, error) {
 	req.Header.Add("X-Microsoft-OutputFormat", "ogg-48khz-16bit-mono-opus")
 
 	resp, err := client.Do(req)
-    if err != nil {
-        return nil, err
-    }
+	if err != nil {
+		return nil, err
+	}
 
-    if resp.StatusCode != http.StatusOK {
-        return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-    }
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
 
-    return &ReadCloserWrapper{
-        Reader: resp.Body,
-        Closer: func() error {
-            return resp.Body.Close()
-        },
-    }, nil
+	opusPackets, err := oggToOpusPackets(resp.Body)
+	if err != nil {
+		resp.Body.Close()
+		return nil, err
+	}
+
+	// Close the audio stream when done reading Opus packets
+	go func() {
+		for range opusPackets {
+		}
+		resp.Body.Close()
+	}()
+
+	return opusPackets, nil
+}
+
+func oggToOpusPackets(reader io.Reader) (<-chan []byte, error) {
+	decoder := ogg.NewDecoder(reader)
+	opusPackets := make(chan []byte)
+
+	go func() {
+		defer close(opusPackets)
+		for {
+			page, err := decoder.Decode()
+			if err != nil {
+				if err == io.EOF {
+					break
+				}
+				fmt.Printf("Error decoding Ogg page: %s\n", err)
+				return
+			}
+
+			for _, packet := range page.Packets {
+				opusPackets <- packet
+			}
+		}
+	}()
+
+	return opusPackets, nil
 }

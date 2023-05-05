@@ -12,6 +12,7 @@ import (
 	"com.deablabs.teno-voice/internal/deps"
 	"com.deablabs.teno-voice/internal/responder"
 	speechtotext "com.deablabs.teno-voice/internal/speechToText"
+	"com.deablabs.teno-voice/internal/textToSpeech/azure"
 	"com.deablabs.teno-voice/pkg/helpers"
 	"github.com/disgoorg/disgo/voice"
 	"github.com/disgoorg/snowflake/v2"
@@ -145,8 +146,11 @@ func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 			// Create a buffered channel for audio bytes to be played in the discord voice call
 			playAudioChannel := make(chan []byte)
 
+			// Create tts service
+			azureTTS := &azure.AzureTTS{}
+
 			// Create responder
-			responder := responder.NewResponder(playAudioChannel)
+			responder := responder.NewResponder(playAudioChannel, azureTTS)
 
 			// Loop that listens to the audio bytes channel and writes them to the Discord voice connection
 			go func() {
