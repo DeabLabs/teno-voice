@@ -14,6 +14,7 @@ import (
 	speechtotext "com.deablabs.teno-voice/internal/speechToText"
 	"com.deablabs.teno-voice/internal/textToSpeech/azure"
 	"com.deablabs.teno-voice/pkg/helpers"
+	"github.com/disgoorg/disgo/bot"
 	"github.com/disgoorg/disgo/voice"
 	"github.com/disgoorg/snowflake/v2"
 	"github.com/gorilla/websocket"
@@ -79,144 +80,134 @@ func (s *Speaker) AddPacket(ctx context.Context, packet []byte) {
 	s.transcriptionStream.WriteMessage(websocket.BinaryMessage, packet)
 }
 
+func decodeAndValidateRequest(w http.ResponseWriter, r *http.Request) (snowflake.ID, snowflake.ID, error) {
+	var jr JoinRequest
+
+	err := helpers.DecodeJSONBody(w, r, &jr)
+	if err != nil {
+		var mr *helpers.MalformedRequest
+		if errors.As(err, &mr) {
+			return 0, 0, fmt.Errorf(mr.Msg)
+		} else {
+			return 0, 0, fmt.Errorf(http.StatusText(http.StatusInternalServerError)+": %s", err.Error())
+		}
+	}
+
+	guildID, err := snowflake.Parse(jr.GuildID)
+	if err != nil {
+		return 0, 0, fmt.Errorf("error parsing guildID: %s", err.Error())
+	}
+
+	channelID, err := snowflake.Parse(jr.ChannelID)
+	if err != nil {
+		return 0, 0, fmt.Errorf("error parsing channelID: %s", err.Error())
+	}
+
+	return guildID, channelID, nil
+}
+
+func setupVoiceConnection(ctx context.Context, client bot.Client, guildID, channelID snowflake.ID) (voice.Conn, error) {
+	conn := client.VoiceManager().CreateConn(guildID)
+
+	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
+	defer cancel()
+	if err := conn.Open(ctx, channelID, false, false); err != nil {
+		return nil, fmt.Errorf("error connecting to voice channel: %s", err.Error())
+	}
+
+	return conn, nil
+}
+
+func writeToVoiceConnection(conn voice.Conn, playAudioChannel chan []byte) {
+	for audioBytes := range playAudioChannel {
+		if _, err := conn.UDP().Write(audioBytes); err != nil {
+			fmt.Printf("error sending audio bytes: %s", err)
+		}
+	}
+}
+
+func handleIncomingPackets(ctx context.Context, client bot.Client, conn voice.Conn, speakers map[snowflake.ID]*Speaker, newSpeakerMutex *sync.Mutex, responder *responder.Responder) {
+	for {
+		packet, err := conn.UDP().ReadPacket()
+		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				println("connection closed")
+				return
+			}
+			fmt.Printf("error while reading from reader: %s", err)
+			continue
+		}
+
+		userID := conn.UserIDBySSRC(packet.SSRC)
+
+		// ignore packets from the bot user itself
+		if userID == client.ID() {
+			continue
+		}
+
+		// create a speaker for the user if one doesn't exist
+		newSpeakerMutex.Lock()
+		if _, ok := speakers[userID]; !ok {
+			s := &Speaker{
+				ID: userID,
+				Mu: sync.Mutex{},
+			}
+
+			speakers[userID] = s
+
+			s.Init(ctx, responder)
+		}
+		newSpeakerMutex.Unlock()
+
+		// add the packet to the speaker
+		speakers[userID].AddPacket(ctx, packet.Opus)
+	}
+}
+
 func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		ctx, cancel := context.WithTimeout(ctx, time.Second*5)
 		defer cancel()
 
-		d := make(chan CallStatus, 1)
-		newSpeakerMutex := sync.Mutex{}
-		go func() {
-			client := *dependencies.DiscordClient
-
-			var jr JoinRequest
-
-			err := helpers.DecodeJSONBody(w, r, &jr)
-			if err != nil {
-				var mr *helpers.MalformedRequest
-				if errors.As(err, &mr) {
-					d <- CallStatus{IsInCall: false, Err: fmt.Errorf(mr.Msg)}
-				} else {
-					d <- CallStatus{IsInCall: false, Err: fmt.Errorf(http.StatusText(http.StatusInternalServerError) + ": " + err.Error())}
-				}
-				return
-			}
-
-			guildID, err := snowflake.Parse(jr.GuildID)
-			if err != nil {
-				d <- CallStatus{IsInCall: false, Err: fmt.Errorf("error parsing guildID: " + err.Error())}
-				return
-			}
-
-			channelID, err := snowflake.Parse(jr.ChannelID)
-			if err != nil {
-				d <- CallStatus{IsInCall: false, Err: fmt.Errorf("error parsing channelID: " + err.Error())}
-				return
-			}
-
-			conn := client.VoiceManager().CreateConn(guildID)
-
-			ctx, cancel := context.WithTimeout(ctx, time.Second*5)
-			defer cancel()
-			if err := conn.Open(ctx, channelID, false, false); err != nil {
-				d <- CallStatus{IsInCall: false, Err: fmt.Errorf("error connecting to voice channel: " + err.Error())}
-				return
-			}
-
-			defer func() {
-				ctx2, cancel2 := context.WithTimeout(context.Background(), time.Second*10)
-				defer cancel2()
-				conn.Close(ctx2)
-			}()
-
-			d <- CallStatus{IsInCall: true, Err: nil}
-			println("starting playback")
-
-			if err := conn.SetSpeaking(ctx, voice.SpeakingFlagMicrophone); err != nil {
-				panic("error setting speaking flag: " + err.Error())
-			}
-
-			if _, err := conn.UDP().Write(voice.SilenceAudioFrame); err != nil {
-				panic("error sending silence: " + err.Error())
-			}
-
-			Speakers := make(map[snowflake.ID]*Speaker)
-
-			// Create a buffered channel for audio bytes to be played in the discord voice call
-			playAudioChannel := make(chan []byte)
-
-			// Create tts service
-			azureTTS := &azure.AzureTTS{}
-
-			// Create responder
-			responder := responder.NewResponder(playAudioChannel, azureTTS)
-
-			// Loop that listens to the audio bytes channel and writes them to the Discord voice connection
-			go func() {
-				for audioBytes := range playAudioChannel {
-					// fmt.Printf("Sending %d bytes of audio data\n", len(audioBytes))
-					if _, err := conn.UDP().Write(audioBytes); err != nil {
-						fmt.Printf("error sending audio bytes: %s", err)
-					}
-				}
-			}()
-
-			for {
-				packet, err := conn.UDP().ReadPacket()
-				if err != nil {
-					if errors.Is(err, net.ErrClosed) {
-						println("connection closed")
-						return
-					}
-					fmt.Printf("error while reading from reader: %s", err)
-					continue
-				}
-
-				userID := conn.UserIDBySSRC(packet.SSRC)
-
-				// ignore packets from the bot user itself
-				if userID == client.ID() {
-					continue
-				}
-
-				// create a speaker for the user if one doesn't exist
-				newSpeakerMutex.Lock()
-				if _, ok := Speakers[userID]; !ok {
-					s := &Speaker{
-						ID: userID,
-						Mu: sync.Mutex{},
-					}
-
-					Speakers[userID] = s
-
-					s.Init(ctx, responder)
-				}
-				newSpeakerMutex.Unlock()
-
-				// add the packet to the speaker
-				Speakers[userID].AddPacket(ctx, packet.Opus)
-			}
-		}()
-
-		select {
-		case <-ctx.Done():
-			w.Write([]byte("Timeout joining voice call"))
-			return
-
-		case result := <-d:
-			if result.Err != nil {
-				w.Write([]byte("Could not join voice call: " + result.Err.Error()))
-				return
-			}
-
-			if result.IsInCall {
-				w.Write([]byte("Joined voice call"))
-			} else {
-				w.Write([]byte("Could not join voice call"))
-			}
+		guildID, channelID, err := decodeAndValidateRequest(w, r)
+		if err != nil {
+			w.Write([]byte(fmt.Sprintf("Could not join voice call: %s", err.Error())))
 			return
 		}
+
+		client := *dependencies.DiscordClient
+		conn, err := setupVoiceConnection(ctx, client, guildID, channelID)
+		if err != nil {
+			w.Write([]byte(fmt.Sprintf("Could not join voice call: %s", err.Error())))
+			return
+		}
+
+		defer func() {
+			ctx2, cancel2 := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel2()
+			conn.Close(ctx2)
+		}()
+
+		if err := conn.SetSpeaking(ctx, voice.SpeakingFlagMicrophone); err != nil {
+			panic("error setting speaking flag: " + err.Error())
+		}
+
+		if _, err := conn.UDP().Write(voice.SilenceAudioFrame); err != nil {
+			panic("error sending silence: " + err.Error())
+		}
+
+		Speakers := make(map[snowflake.ID]*Speaker)
+		playAudioChannel := make(chan []byte)
+		azureTTS := &azure.AzureTTS{}
+		responder := responder.NewResponder(playAudioChannel, azureTTS)
+
+		go writeToVoiceConnection(conn, playAudioChannel)
+
+		newSpeakerMutex := sync.Mutex{}
+		handleIncomingPackets(ctx, client, conn, Speakers, &newSpeakerMutex, responder)
+
+		w.Write([]byte("Joined voice call"))
 	})
 }
 
