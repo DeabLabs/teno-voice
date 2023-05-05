@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 
+	Config "com.deablabs.teno-voice/internal/config"
 	openai "github.com/sashabaranov/go-openai"
 )
 
+var openAiToken = Config.Environment.OpenAIToken
+
 func CreateOpenAIStream(model string, prompt string, maxTokens int) (*openai.ChatCompletionStream, error) {
 	// Initialize OpenAI client
-	c := openai.NewClient("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")
+	c := openai.NewClient(openAiToken)
 	ctx := context.Background()
 
 	// Set up the request to OpenAI with the required parameters

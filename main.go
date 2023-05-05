@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	Config "com.deablabs.teno-voice/internal/config"
 	"com.deablabs.teno-voice/internal/deps"
 	"com.deablabs.teno-voice/internal/discord"
 	"github.com/disgoorg/disgo"
@@ -13,18 +14,12 @@ import (
 	"github.com/disgoorg/disgo/gateway"
 	"github.com/disgoorg/log"
 	"github.com/go-chi/chi"
-	"github.com/joho/godotenv"
 )
 
 func main() {
 	log.Info("starting up")
 
-	err := godotenv.Load()
-	if err != nil {
-		log.Info("Could not load .env file")
-	}
-
-	token := os.Getenv("TOKEN")
+	token := Config.Environment.DiscordToken
 
 	s := make(chan os.Signal, 1)
 

@@ -7,15 +7,17 @@ import (
 	"io"
 	"net/http"
 
+	Config "com.deablabs.teno-voice/internal/config"
 	"mccoy.space/g/ogg"
 )
 
 const (
-	subscriptionKey = "3b517889eef943d189356e4a7b0bae35"
-	region          = "eastus"
-	tokenEndpoint   = "https://" + region + ".api.cognitive.microsoft.com/sts/v1.0/issueToken"
-	ttsEndpoint     = "https://" + region + ".tts.speech.microsoft.com/cognitiveservices/v1"
+	region        = "eastus"
+	tokenEndpoint = "https://" + region + ".api.cognitive.microsoft.com/sts/v1.0/issueToken"
+	ttsEndpoint   = "https://" + region + ".tts.speech.microsoft.com/cognitiveservices/v1"
 )
+
+var subscriptionKey = Config.Environment.AzureToken
 
 type SSML struct {
 	XMLName xml.Name `xml:"speak"`
