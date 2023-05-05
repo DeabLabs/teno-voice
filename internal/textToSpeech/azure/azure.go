@@ -34,7 +34,19 @@ type Voice struct {
 	Text    string   `xml:",chardata"`
 }
 
-type AzureTTS struct{}
+type AzureTTS struct {
+	lang   string
+	gender string
+	name   string
+}
+
+func NewAzureTTS(lang string, gender string, name string) *AzureTTS {
+	return &AzureTTS{
+		lang:   lang,
+		gender: gender,
+		name:   name,
+	}
+}
 
 func getAccessToken() (string, error) {
 	client := &http.Client{}
@@ -64,33 +76,19 @@ func (a *AzureTTS) Synthesize(text string) (<-chan []byte, error) {
 		return nil, err
 	}
 
-	ssml := SSML{
-		Version: "1.0",
-		Lang:    "en-US",
-		Voice: Voice{
-			Lang:   "en-US",
-			Name:   "en-US-BrandonNeural",
-			Gender: "Male",
-			Text:   text,
-		},
-	}
+	ssml := a.createSSML(text)
 
 	ssmlBytes, err := xml.Marshal(ssml)
 	if err != nil {
 		return nil, err
 	}
 
-	client := &http.Client{}
-	req, err := http.NewRequest("POST", ttsEndpoint, bytes.NewReader(ssmlBytes))
+	req, err := a.createSynthesizeRequest(ssmlBytes, token)
 	if err != nil {
 		return nil, err
 	}
 
-	req.Header.Add("Authorization", "Bearer "+token)
-	req.Header.Add("Content-Type", "application/ssml+xml")
-	req.Header.Add("User-Agent", "AzureTextToSpeech")
-	req.Header.Add("X-Microsoft-OutputFormat", "ogg-48khz-16bit-mono-opus")
-
+	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -139,4 +137,31 @@ func oggToOpusPackets(reader io.Reader) (<-chan []byte, error) {
 	}()
 
 	return opusPackets, nil
+}
+
+func (a *AzureTTS) createSSML(text string) SSML {
+	return SSML{
+		Version: "1.0",
+		Lang:    a.lang,
+		Voice: Voice{
+			Lang:   a.lang,
+			Name:   a.name,
+			Gender: a.gender,
+			Text:   text,
+		},
+	}
+}
+
+func (a *AzureTTS) createSynthesizeRequest(ssmlBytes []byte, token string) (*http.Request, error) {
+	req, err := http.NewRequest("POST", ttsEndpoint, bytes.NewReader(ssmlBytes))
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Authorization", "Bearer "+token)
+	req.Header.Add("Content-Type", "application/ssml+xml")
+	req.Header.Add("User-Agent", "AzureTextToSpeech")
+	req.Header.Add("X-Microsoft-OutputFormat", "ogg-48khz-16bit-mono-opus")
+
+	return req, nil
 }
