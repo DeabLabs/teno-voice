@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"strings"
 	"sync"
 	"unicode"
@@ -54,8 +53,8 @@ func NewResponder(playAudioChannel chan []byte, ttsService texttospeech.TextToSp
 	}
 
 	go responder.listenForSpeakingState()
-	go responder.synthesizeSentences()
-	go responder.playSynthesizedSentences()
+	// go responder.synthesizeSentences()
+	// go responder.playSynthesizedSentences()
 
 	return responder
 }
@@ -67,46 +66,46 @@ func (r *Responder) UpdateUserSpeakingState(userID snowflake.ID, isSpeaking bool
 	}
 }
 
-func (r *Responder) synthesizeSentences() {
-	sentenceIndex := 0
-	for sentence := range r.sentenceChan {
-		log.Printf("Synthesizing sentence: %s\n", sentence)
-		opusPackets, err := r.ttsService.Synthesize(sentence)
-		if err != nil {
-			fmt.Printf("Error generating speech: %v\n", err)
-			continue
-		}
-		r.audioStreamChan <- audioStreamWithIndex{
-			index:       sentenceIndex,
-			opusPackets: opusPackets,
-		}
-		sentenceIndex++
-	}
-}
+// func (r *Responder) synthesizeSentences() {
+// 	sentenceIndex := 0
+// 	for sentence := range r.sentenceChan {
+// 		log.Printf("Synthesizing sentence: %s\n", sentence)
+// 		opusPackets, err := r.ttsService.Synthesize(sentence)
+// 		if err != nil {
+// 			fmt.Printf("Error generating speech: %v\n", err)
+// 			continue
+// 		}
+// 		r.audioStreamChan <- audioStreamWithIndex{
+// 			index:       sentenceIndex,
+// 			opusPackets: opusPackets,
+// 		}
+// 		sentenceIndex++
+// 	}
+// }
 
-func (r *Responder) playSynthesizedSentences() {
-	audioStreamMap := make(map[int]<-chan []byte)
-	nextAudioIndex := 0
+// func (r *Responder) playSynthesizedSentences() {
+// 	audioStreamMap := make(map[int]<-chan []byte)
+// 	nextAudioIndex := 0
 
-	for audioStreamWithIndex := range r.audioStreamChan {
-		audioStreamMap[audioStreamWithIndex.index] = audioStreamWithIndex.opusPackets
+// 	for audioStreamWithIndex := range r.audioStreamChan {
+// 		audioStreamMap[audioStreamWithIndex.index] = audioStreamWithIndex.opusPackets
 
-		for {
-			opusPackets, ok := audioStreamMap[nextAudioIndex]
-			if !ok {
-				break
-			}
+// 		for {
+// 			opusPackets, ok := audioStreamMap[nextAudioIndex]
+// 			if !ok {
+// 				break
+// 			}
 
-			for packet := range opusPackets {
-				r.playAudioChannel <- packet
-			}
+// 			for packet := range opusPackets {
+// 				r.playAudioChannel <- packet
+// 			}
 
-			// Remove the played audio stream from the map and increment the nextAudioIndex
-			delete(audioStreamMap, nextAudioIndex)
-			nextAudioIndex++
-		}
-	}
-}
+// 			// Remove the played audio stream from the map and increment the nextAudioIndex
+// 			delete(audioStreamMap, nextAudioIndex)
+// 			nextAudioIndex++
+// 		}
+// 	}
+// }
 
 func (r *Responder) listenForSpeakingState() {
 	for state := range r.speakingStateChan {
@@ -133,7 +132,30 @@ func (r *Responder) IsAnyUserSpeaking() bool {
 
 func (r *Responder) NewTranscription(line string) {
 	r.transcript.AddLine(line)
-	r.Respond()
+	// r.Respond()
+	r.playTextInVoiceChannel(line)
+}
+
+func (r *Responder) playTextInVoiceChannel(line string) {
+	opusReader, err := r.ttsService.Synthesize(line)
+	if err != nil {
+		fmt.Printf("Error generating speech: %v", err)
+		return
+	}
+	defer opusReader.Close()
+
+	buf := make([]byte, 4096) // adjust the buffer size if needed
+	for {
+		n, err := opusReader.Read(buf)
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			fmt.Printf("Error reading Opus packet: %s", err)
+			return
+		}
+		r.playAudioChannel <- buf[:n]
+	}
 }
 
 func (r *Responder) GetTranscript() *transcript.Transcript {

@@ -207,7 +207,7 @@ func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 
 		Speakers := make(map[snowflake.ID]*Speaker)
 		playAudioChannel := make(chan []byte)
-		azureTTS := azure.NewAzureTTS("en-US", "Male", "en-US-BrandonNeural")
+		azureTTS := azure.NewAzureTTS()
 		responder := responder.NewResponder(playAudioChannel, azureTTS)
 
 		go writeToVoiceConnection(&conn, playAudioChannel)

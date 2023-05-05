@@ -34,18 +34,10 @@ type Voice struct {
 	Text    string   `xml:",chardata"`
 }
 
-type AzureTTS struct {
-	lang   string
-	gender string
-	name   string
-}
+type AzureTTS struct{}
 
-func NewAzureTTS(lang string, gender string, name string) *AzureTTS {
-	return &AzureTTS{
-		lang:   lang,
-		gender: gender,
-		name:   name,
-	}
+func NewAzureTTS() *AzureTTS {
+	return &AzureTTS{}
 }
 
 func getAccessToken() (string, error) {
@@ -70,89 +62,29 @@ func getAccessToken() (string, error) {
 	return string(token), nil
 }
 
-func (a *AzureTTS) Synthesize(text string) (<-chan []byte, error) {
+func (a *AzureTTS) Synthesize(text string) (io.ReadCloser, error) {
 	token, err := getAccessToken()
 	if err != nil {
 		return nil, err
 	}
 
-	ssml := a.createSSML(text)
+	ssml := SSML{
+		Version: "1.0",
+		Lang:    "en-US",
+		Voice: Voice{
+			Lang:   "en-US",
+			Name:   "en-US-BrandonNeural",
+			Gender: "Male",
+			Text:   text,
+		},
+	}
 
 	ssmlBytes, err := xml.Marshal(ssml)
 	if err != nil {
 		return nil, err
 	}
 
-	req, err := a.createSynthesizeRequest(ssmlBytes, token)
-	if err != nil {
-		return nil, err
-	}
-
 	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
-
-	opusPackets, err := oggToOpusPackets(resp.Body)
-	if err != nil {
-		resp.Body.Close()
-		return nil, err
-	}
-
-	// Close the audio stream when done reading Opus packets
-	go func() {
-		for range opusPackets {
-		}
-		resp.Body.Close()
-	}()
-
-	return opusPackets, nil
-}
-
-func oggToOpusPackets(reader io.Reader) (<-chan []byte, error) {
-	decoder := ogg.NewDecoder(reader)
-	opusPackets := make(chan []byte)
-
-	go func() {
-		defer close(opusPackets)
-		for {
-			page, err := decoder.Decode()
-			if err != nil {
-				if err == io.EOF {
-					break
-				}
-				fmt.Printf("Error decoding Ogg page: %s\n", err)
-				return
-			}
-
-			for _, packet := range page.Packets {
-				opusPackets <- packet
-			}
-		}
-	}()
-
-	return opusPackets, nil
-}
-
-func (a *AzureTTS) createSSML(text string) SSML {
-	return SSML{
-		Version: "1.0",
-		Lang:    a.lang,
-		Voice: Voice{
-			Lang:   a.lang,
-			Name:   a.name,
-			Gender: a.gender,
-			Text:   text,
-		},
-	}
-}
-
-func (a *AzureTTS) createSynthesizeRequest(ssmlBytes []byte, token string) (*http.Request, error) {
 	req, err := http.NewRequest("POST", ttsEndpoint, bytes.NewReader(ssmlBytes))
 	if err != nil {
 		return nil, err
@@ -163,5 +95,78 @@ func (a *AzureTTS) createSynthesizeRequest(ssmlBytes []byte, token string) (*htt
 	req.Header.Add("User-Agent", "AzureTextToSpeech")
 	req.Header.Add("X-Microsoft-OutputFormat", "ogg-48khz-16bit-mono-opus")
 
-	return req, nil
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	opusReader := NewOpusPacketReader(resp.Body)
+
+	return opusReader, nil
+}
+
+type OpusPacketReader struct {
+	reader      io.ReadCloser
+	oggDecoder  *ogg.Decoder
+	packetChan  chan []byte
+	errChan     chan error
+	closeSignal chan struct{}
+}
+
+func NewOpusPacketReader(reader io.ReadCloser) *OpusPacketReader {
+	opr := &OpusPacketReader{
+		reader:      reader,
+		oggDecoder:  ogg.NewDecoder(reader),
+		packetChan:  make(chan []byte),
+		errChan:     make(chan error),
+		closeSignal: make(chan struct{}),
+	}
+
+	go opr.processOggStream()
+
+	return opr
+}
+
+func (o *OpusPacketReader) processOggStream() {
+	defer close(o.packetChan)
+	defer close(o.errChan)
+
+	for {
+		select {
+		case <-o.closeSignal:
+			return
+		default:
+			page, err := o.oggDecoder.Decode()
+			if err != nil {
+				o.errChan <- err
+				return
+			}
+
+			for _, packet := range page.Packets {
+				o.packetChan <- packet
+			}
+		}
+	}
+}
+
+func (o *OpusPacketReader) Read(p []byte) (int, error) {
+	select {
+	case packet, ok := <-o.packetChan:
+		if !ok {
+			return 0, io.EOF
+		}
+		n := copy(p, packet)
+		return n, nil
+	case err := <-o.errChan:
+		return 0, err
+	}
+}
+
+func (o *OpusPacketReader) Close() error {
+	close(o.closeSignal)
+	return o.reader.Close()
 }
