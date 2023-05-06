@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	Config "com.deablabs.teno-voice/internal/config"
 	"mccoy.space/g/ogg"
@@ -115,6 +116,7 @@ type OpusPacketReader struct {
 	packetChan  chan []byte
 	errChan     chan error
 	closeSignal chan struct{}
+	lastRead    time.Time
 }
 
 func NewOpusPacketReader(reader io.ReadCloser) *OpusPacketReader {
@@ -160,6 +162,15 @@ func (o *OpusPacketReader) Read(p []byte) (int, error) {
 			return 0, io.EOF
 		}
 		n := copy(p, packet)
+
+		// Check the time elapsed since the last packet was read
+		elapsed := time.Since(o.lastRead)
+		if elapsed < 20*time.Millisecond {
+			// Sleep for the remaining time to make it consistent with the 20ms frame size
+			time.Sleep(20*time.Millisecond - elapsed)
+		}
+		o.lastRead = time.Now() // Update the lastRead timestamp
+
 		return n, nil
 	case err := <-o.errChan:
 		return 0, err

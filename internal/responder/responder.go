@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
+	"math"
 	"strings"
 	"sync"
 	"unicode"
@@ -27,7 +29,7 @@ type UserSpeakingState struct {
 
 type audioStreamWithIndex struct {
 	index       int
-	opusPackets <-chan []byte
+	opusPackets io.ReadCloser
 }
 
 type Responder struct {
@@ -53,8 +55,8 @@ func NewResponder(playAudioChannel chan []byte, ttsService texttospeech.TextToSp
 	}
 
 	go responder.listenForSpeakingState()
-	// go responder.synthesizeSentences()
-	// go responder.playSynthesizedSentences()
+	go responder.synthesizeSentences()
+	go responder.playSynthesizedSentences()
 
 	return responder
 }
@@ -66,46 +68,65 @@ func (r *Responder) UpdateUserSpeakingState(userID snowflake.ID, isSpeaking bool
 	}
 }
 
-// func (r *Responder) synthesizeSentences() {
-// 	sentenceIndex := 0
-// 	for sentence := range r.sentenceChan {
-// 		log.Printf("Synthesizing sentence: %s\n", sentence)
-// 		opusPackets, err := r.ttsService.Synthesize(sentence)
-// 		if err != nil {
-// 			fmt.Printf("Error generating speech: %v\n", err)
-// 			continue
-// 		}
-// 		r.audioStreamChan <- audioStreamWithIndex{
-// 			index:       sentenceIndex,
-// 			opusPackets: opusPackets,
-// 		}
-// 		sentenceIndex++
-// 	}
-// }
+func (r *Responder) synthesizeSentences() {
+	defer close(r.audioStreamChan) // Make sure to close the audioStreamChan when sentenceChan is closed
 
-// func (r *Responder) playSynthesizedSentences() {
-// 	audioStreamMap := make(map[int]<-chan []byte)
-// 	nextAudioIndex := 0
+	sentenceIndex := 0
+	for sentence := range r.sentenceChan {
+		log.Printf("Synthesizing sentence: %s\n", sentence)
+		opusPackets, err := r.ttsService.Synthesize(sentence)
+		if err != nil {
+			fmt.Printf("Error generating speech: %v\n", err)
+			continue
+		}
+		r.audioStreamChan <- audioStreamWithIndex{
+			index:       sentenceIndex,
+			opusPackets: opusPackets,
+		}
+		sentenceIndex++
+	}
+}
 
-// 	for audioStreamWithIndex := range r.audioStreamChan {
-// 		audioStreamMap[audioStreamWithIndex.index] = audioStreamWithIndex.opusPackets
+func (r *Responder) playSynthesizedSentences() {
+	audioStreamMap := make(map[int]io.ReadCloser)
+	nextAudioIndex := 0
+	bytesToDiscard := 1000 // Adjust this value based on how much you want to trim from the beginning
 
-// 		for {
-// 			opusPackets, ok := audioStreamMap[nextAudioIndex]
-// 			if !ok {
-// 				break
-// 			}
+	for audioStreamWithIndex := range r.audioStreamChan {
+		audioStreamMap[audioStreamWithIndex.index] = audioStreamWithIndex.opusPackets
 
-// 			for packet := range opusPackets {
-// 				r.playAudioChannel <- packet
-// 			}
+		for {
+			opusPackets, ok := audioStreamMap[nextAudioIndex]
+			if !ok {
+				break
+			}
 
-// 			// Remove the played audio stream from the map and increment the nextAudioIndex
-// 			delete(audioStreamMap, nextAudioIndex)
-// 			nextAudioIndex++
-// 		}
-// 	}
-// }
+			// Discard bytes from the beginning of the audio stream
+			if err := r.discardBytes(opusPackets, bytesToDiscard); err != nil {
+				fmt.Printf("Error discarding bytes: %s\n", err)
+				break
+			}
+
+			// Use a buffer to read the packets and send them to the playAudioChannel
+			buf := make([]byte, 4096)
+			for {
+				n, err := opusPackets.Read(buf)
+				if err != nil {
+					if err != io.EOF {
+						fmt.Printf("Error reading Opus packet: %s\n", err)
+					}
+					break
+				}
+				r.playAudioChannel <- buf[:n]
+			}
+			opusPackets.Close() // Close the opusPackets after playing
+
+			// Remove the played audio stream from the map and increment the nextAudioIndex
+			delete(audioStreamMap, nextAudioIndex)
+			nextAudioIndex++
+		}
+	}
+}
 
 func (r *Responder) listenForSpeakingState() {
 	for state := range r.speakingStateChan {
@@ -132,8 +153,8 @@ func (r *Responder) IsAnyUserSpeaking() bool {
 
 func (r *Responder) NewTranscription(line string) {
 	r.transcript.AddLine(line)
-	// r.Respond()
-	r.playTextInVoiceChannel(line)
+	r.Respond()
+	// r.playTextInVoiceChannel(line)
 }
 
 func (r *Responder) playTextInVoiceChannel(line string) {
@@ -250,4 +271,28 @@ func startsWithWhitespace(token string) bool {
 	}
 	firstChar := rune(token[0])
 	return unicode.IsSpace(firstChar)
+}
+func isSilentPacket(packet []byte) bool {
+	// A simple heuristic to detect silence: check if all bytes are equal to 0
+	for _, b := range packet {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func (r *Responder) discardBytes(reader io.Reader, bytesToDiscard int) error {
+	buf := make([]byte, 4096)
+
+	for bytesToDiscard > 0 {
+		n := int(math.Min(float64(cap(buf)), float64(bytesToDiscard)))
+		readBytes, err := reader.Read(buf[:n])
+		if err != nil {
+			return err
+		}
+		bytesToDiscard -= readBytes
+	}
+
+	return nil
 }

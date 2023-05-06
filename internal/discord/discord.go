@@ -124,9 +124,20 @@ func setupVoiceConnection(ctx context.Context, clientAdress *bot.Client, guildID
 
 func writeToVoiceConnection(connection *voice.Conn, playAudioChannel chan []byte) {
 	conn := *connection
-	for audioBytes := range playAudioChannel {
-		if _, err := conn.UDP().Write(audioBytes); err != nil {
-			fmt.Printf("error sending audio bytes: %s", err)
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		select {
+		case audioBytes, ok := <-playAudioChannel:
+			if !ok {
+				return
+			}
+			if _, err := conn.UDP().Write(audioBytes); err != nil {
+				fmt.Printf("error sending audio bytes: %s\n", err)
+			}
+			// time.Sleep(20 * time.Millisecond) // Add a short sleep
+		default:
 		}
 	}
 }
