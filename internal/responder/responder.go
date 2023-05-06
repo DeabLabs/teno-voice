@@ -11,6 +11,7 @@ import (
 	"math"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 
 	// "strings"
@@ -30,6 +31,7 @@ type UserSpeakingState struct {
 type audioStreamWithIndex struct {
 	index       int
 	opusPackets io.ReadCloser
+	sentence    string
 }
 
 type Responder struct {
@@ -82,6 +84,7 @@ func (r *Responder) synthesizeSentences() {
 		r.audioStreamChan <- audioStreamWithIndex{
 			index:       sentenceIndex,
 			opusPackets: opusPackets,
+			sentence:    sentence,
 		}
 		sentenceIndex++
 	}
@@ -94,6 +97,7 @@ func (r *Responder) playSynthesizedSentences() {
 
 	for audioStreamWithIndex := range r.audioStreamChan {
 		audioStreamMap[audioStreamWithIndex.index] = audioStreamWithIndex.opusPackets
+		sentence := audioStreamWithIndex.sentence
 
 		for {
 			opusPackets, ok := audioStreamMap[nextAudioIndex]
@@ -121,6 +125,9 @@ func (r *Responder) playSynthesizedSentences() {
 			}
 			opusPackets.Close() // Close the opusPackets after playing
 
+			// Add bot sentence to transcript
+			r.botLineSpoken(sentence)
+
 			// Remove the played audio stream from the map and increment the nextAudioIndex
 			delete(audioStreamMap, nextAudioIndex)
 			nextAudioIndex++
@@ -133,8 +140,6 @@ func (r *Responder) listenForSpeakingState() {
 		r.speakingUsersMu.Lock()
 		r.speakingUsers[state.UserID] = state.IsSpeaking
 		r.speakingUsersMu.Unlock()
-
-		// If a user is speaking, stop playing audio
 	}
 }
 
@@ -152,35 +157,15 @@ func (r *Responder) IsAnyUserSpeaking() bool {
 }
 
 func (r *Responder) NewTranscription(line string) {
-	r.transcript.AddLine(line)
+	formattedLine := r.FormatLine("User", line, time.Now())
+	r.transcript.AddLine(formattedLine)
 	r.Respond()
 	// r.playTextInVoiceChannel(line)
 }
 
-func (r *Responder) playTextInVoiceChannel(line string) {
-	opusReader, err := r.ttsService.Synthesize(line)
-	if err != nil {
-		fmt.Printf("Error generating speech: %v", err)
-		return
-	}
-	defer opusReader.Close()
-
-	buf := make([]byte, 4096) // adjust the buffer size if needed
-	for {
-		n, err := opusReader.Read(buf)
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			fmt.Printf("Error reading Opus packet: %s", err)
-			return
-		}
-		r.playAudioChannel <- buf[:n]
-	}
-}
-
-func (r *Responder) GetTranscript() *transcript.Transcript {
-	return r.transcript
+func (r *Responder) botLineSpoken(line string) {
+	formattedLine := r.FormatLine("Bot", line, time.Now())
+	r.transcript.AddLine(formattedLine)
 }
 
 func (r *Responder) Respond() {
@@ -236,6 +221,7 @@ func (r *Responder) Respond() {
 			previousToken = currentToken
 		}
 	}
+
 	// Emit any remaining sentence
 	if sentenceBuilder.Len() > 0 {
 		r.sentenceChan <- sentenceBuilder.String()
@@ -272,15 +258,6 @@ func startsWithWhitespace(token string) bool {
 	firstChar := rune(token[0])
 	return unicode.IsSpace(firstChar)
 }
-func isSilentPacket(packet []byte) bool {
-	// A simple heuristic to detect silence: check if all bytes are equal to 0
-	for _, b := range packet {
-		if b != 0 {
-			return false
-		}
-	}
-	return true
-}
 
 func (r *Responder) discardBytes(reader io.Reader, bytesToDiscard int) error {
 	buf := make([]byte, 4096)
@@ -295,4 +272,35 @@ func (r *Responder) discardBytes(reader io.Reader, bytesToDiscard int) error {
 	}
 
 	return nil
+}
+
+func (r *Responder) playTextInVoiceChannel(line string) {
+	opusReader, err := r.ttsService.Synthesize(line)
+	if err != nil {
+		fmt.Printf("Error generating speech: %v", err)
+		return
+	}
+	defer opusReader.Close()
+
+	buf := make([]byte, 4096) // adjust the buffer size if needed
+	for {
+		n, err := opusReader.Read(buf)
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			fmt.Printf("Error reading Opus packet: %s", err)
+			return
+		}
+		r.playAudioChannel <- buf[:n]
+	}
+}
+
+func (r *Responder) GetTranscript() *transcript.Transcript {
+	return r.transcript
+}
+
+// Format the line for the transcript, including the username, the line spoken, and the human readable timestamp
+func (r *Responder) FormatLine(username string, line string, timestamp time.Time) string {
+	return fmt.Sprintf("[%s] %s: %s", timestamp.Format("15:04:05"), username, line)
 }
