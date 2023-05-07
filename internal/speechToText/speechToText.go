@@ -60,6 +60,7 @@ func NewStream(ctx context.Context, onClose func(), responder *responder.Respond
 				if ok && transcription != "" {
 					if !jsonParsed.Path("is_final").Data().(bool) {
 						responder.UpdateUserSpeakingState(userID, true)
+						responder.InterimTranscriptionReceived()
 					} else {
 						responder.UpdateUserSpeakingState(userID, false)
 						responder.NewTranscription(transcription)

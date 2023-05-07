@@ -4,6 +4,7 @@ import (
 	// "context"
 	// "errors"
 
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -39,10 +40,12 @@ type Responder struct {
 	playAudioChannel  chan []byte
 	audioStreamChan   chan audioStreamWithIndex
 	speakingStateChan chan UserSpeakingState
-	speakingUsers     map[snowflake.ID]bool
+	speakingUsers     map[snowflake.ID]struct{}
 	speakingUsersMu   sync.Mutex
+	isAnyUserSpeaking bool
 	sentenceChan      chan string
 	ttsService        texttospeech.TextToSpeechService
+	cancelResponse    context.CancelFunc
 }
 
 func NewResponder(playAudioChannel chan []byte, ttsService texttospeech.TextToSpeechService) *Responder {
@@ -52,25 +55,31 @@ func NewResponder(playAudioChannel chan []byte, ttsService texttospeech.TextToSp
 		audioStreamChan:   make(chan audioStreamWithIndex, 100),
 		transcript:        transcript.NewTranscript(),
 		speakingStateChan: make(chan UserSpeakingState),
-		speakingUsers:     make(map[snowflake.ID]bool),
+		speakingUsers:     make(map[snowflake.ID]struct{}),
+		isAnyUserSpeaking: false,
 		ttsService:        ttsService,
+		cancelResponse:    nil,
 	}
-
-	go responder.listenForSpeakingState()
-	go responder.synthesizeSentences()
-	go responder.playSynthesizedSentences()
 
 	return responder
 }
 
 func (r *Responder) UpdateUserSpeakingState(userID snowflake.ID, isSpeaking bool) {
-	r.speakingStateChan <- UserSpeakingState{
-		UserID:     userID,
-		IsSpeaking: isSpeaking,
+	r.speakingUsersMu.Lock()
+	if isSpeaking {
+		r.speakingUsers[userID] = struct{}{}
+	} else {
+		delete(r.speakingUsers, userID)
 	}
+
+	r.isAnyUserSpeaking = len(r.speakingUsers) > 0
+	r.speakingUsersMu.Unlock()
+
+	log.Printf("Speaking users: %v\n", r.speakingUsers)
+	log.Printf("isAnyUserSpeaking: %v\n", r.isAnyUserSpeaking)
 }
 
-func (r *Responder) synthesizeSentences() {
+func (r *Responder) synthesizeSentences(ctx context.Context) {
 	defer close(r.audioStreamChan) // Make sure to close the audioStreamChan when sentenceChan is closed
 
 	sentenceIndex := 0
@@ -87,10 +96,15 @@ func (r *Responder) synthesizeSentences() {
 			sentence:    sentence,
 		}
 		sentenceIndex++
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
 	}
 }
 
-func (r *Responder) playSynthesizedSentences() {
+func (r *Responder) playSynthesizedSentences(ctx context.Context) {
 	audioStreamMap := make(map[int]io.ReadCloser)
 	nextAudioIndex := 0
 	bytesToDiscard := 1000 // Adjust this value based on how much you want to trim from the beginning
@@ -114,6 +128,12 @@ func (r *Responder) playSynthesizedSentences() {
 			// Use a buffer to read the packets and send them to the playAudioChannel
 			buf := make([]byte, 4096)
 			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+
 				n, err := opusPackets.Read(buf)
 				if err != nil {
 					if err != io.EOF {
@@ -125,7 +145,6 @@ func (r *Responder) playSynthesizedSentences() {
 			}
 			opusPackets.Close() // Close the opusPackets after playing
 
-			// Add bot sentence to transcript
 			r.botLineSpoken(sentence)
 
 			// Remove the played audio stream from the map and increment the nextAudioIndex
@@ -135,32 +154,21 @@ func (r *Responder) playSynthesizedSentences() {
 	}
 }
 
-func (r *Responder) listenForSpeakingState() {
-	for state := range r.speakingStateChan {
-		r.speakingUsersMu.Lock()
-		r.speakingUsers[state.UserID] = state.IsSpeaking
-		r.speakingUsersMu.Unlock()
+func (r *Responder) InterimTranscriptionReceived() {
+	if r.cancelResponse != nil {
+		r.cancelResponse()
 	}
-}
-
-func (r *Responder) IsAnyUserSpeaking() bool {
-	r.speakingUsersMu.Lock()
-	defer r.speakingUsersMu.Unlock()
-
-	for _, isSpeaking := range r.speakingUsers {
-		if isSpeaking {
-			return true
-		}
-	}
-
-	return false
 }
 
 func (r *Responder) NewTranscription(line string) {
 	formattedLine := r.FormatLine("User", line, time.Now())
 	r.transcript.AddLine(formattedLine)
-	r.Respond()
-	// r.playTextInVoiceChannel(line)
+
+	if r.cancelResponse != nil {
+		r.cancelResponse()
+	}
+
+	r.cancelResponse = r.Respond()
 }
 
 func (r *Responder) botLineSpoken(line string) {
@@ -168,12 +176,32 @@ func (r *Responder) botLineSpoken(line string) {
 	r.transcript.AddLine(formattedLine)
 }
 
-func (r *Responder) Respond() {
+func (r *Responder) Respond() context.CancelFunc {
+	ctx, cancelFunc := context.WithCancel(context.Background())
+	r.sentenceChan = make(chan string)
+	r.audioStreamChan = make(chan audioStreamWithIndex)
+
+	// Create channel to signal end of token stream
+	// tokenStreamDone := make(chan struct{})
+
 	// Get recent lines of the transcript
 	lines := r.transcript.GetRecentLines(10)
 
+	// Start the goroutine to get a stream of tokens
+	go r.getTokenStream(ctx, lines, "openai", "gpt-3.5-turbo")
+
+	// Start the goroutine to synthesize the sentences into audio
+	go r.synthesizeSentences(ctx)
+
+	// Start the goroutine to play the synthesized sentences
+	go r.playSynthesizedSentences(ctx)
+
+	return cancelFunc
+}
+
+func (r *Responder) getTokenStream(ctx context.Context, lines string, service string, model string) {
 	// Create the chat completion stream
-	stream, err := llm.GetTranscriptResponseStream(lines, "openai", "gpt-3.5-turbo")
+	stream, err := llm.GetTranscriptResponseStream(lines, service, model)
 	if err != nil {
 		fmt.Printf("Token stream error: %v\n", err)
 		return
@@ -205,6 +233,11 @@ func (r *Responder) Respond() {
 			// Extract the token from the response
 			currentToken := response.Choices[0].Delta.Content
 
+			// If token is a "^", return
+			if currentToken == "^" {
+				return
+			}
+
 			// If there is a previous token, append it to the sentenceBuilder
 			if previousToken != "" {
 				sentenceBuilder.WriteString(previousToken)
@@ -219,6 +252,11 @@ func (r *Responder) Respond() {
 
 			// Set the previous token to be the current token for the next iteration
 			previousToken = currentToken
+		}
+		select {
+		case <-ctx.Done():
+			return
+		default:
 		}
 	}
 
