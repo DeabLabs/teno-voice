@@ -22,6 +22,8 @@ func NewStream(ctx context.Context, onClose func(), responder *responder.Respond
 		Sample_rate:     48000,
 		Channels:        2,
 		Interim_results: true,
+		Search:          []string{responder.GetBotName()},
+		Keywords:        []string{responder.GetBotName()},
 	})
 
 	if err != nil {
@@ -56,18 +58,24 @@ func NewStream(ctx context.Context, onClose func(), responder *responder.Respond
 
 				transcription, ok := jsonParsed.Path("channel.alternatives.0.transcript").Data().(string)
 
-				// If the transcription isn't empty, and the transcription isn't final, update the user's speaking state and send the transcription to the responder if it's final
 				if ok && transcription != "" {
 					if !jsonParsed.Path("is_final").Data().(bool) {
-						responder.UpdateUserSpeakingState(userID, true)
 						responder.InterimTranscriptionReceived()
 					} else {
-						responder.UpdateUserSpeakingState(userID, false)
-						responder.NewTranscription(transcription)
-						// log.Printf("User <%s>: %s", userID.String(), transcription)
+						// Check if the bot name was spoken
+						botNameConfidence := float64(0)
+						searchResults := jsonParsed.Path("channel.search").Children()
+						for _, searchResult := range searchResults {
+							hits := searchResult.Path("hits").Children()
+							for _, hit := range hits {
+								confidence, _ := hit.Path("confidence").Data().(float64)
+								if confidence > botNameConfidence {
+									botNameConfidence = confidence
+								}
+							}
+						}
+						responder.NewTranscription(transcription, botNameConfidence)
 					}
-					// Print whether anyone is currently speaking
-					//log.Printf("Speaking state: %t", responder.IsAnyUserSpeaking())
 				}
 
 			case <-ctx.Done():

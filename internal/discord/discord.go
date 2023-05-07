@@ -219,7 +219,18 @@ func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 		Speakers := make(map[snowflake.ID]*Speaker)
 		playAudioChannel := make(chan []byte)
 		azureTTS := azure.NewAzureTTS()
-		responder := responder.NewResponder(playAudioChannel, azureTTS)
+		// Create a responderConfig
+		responderConfig := responder.ResponderConfig{
+			BotName:                    "Teno",
+			SleepMode:                  responder.AutoSleep,
+			LinesBeforeSleep:           5,
+			BotNameConfidenceThreshold: 0.7,
+			LLMService:                 "openai",
+			LLMModel:                   "gpt-3.5-turbo",
+			TranscriptContextSize:      20,
+		}
+
+		responder := responder.NewResponder(playAudioChannel, azureTTS, responderConfig)
 
 		go writeToVoiceConnection(&conn, playAudioChannel)
 

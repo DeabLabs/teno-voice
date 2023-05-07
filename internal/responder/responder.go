@@ -11,7 +11,6 @@ import (
 	"log"
 	"math"
 	"strings"
-	"sync"
 	"time"
 	"unicode"
 
@@ -21,12 +20,24 @@ import (
 	"com.deablabs.teno-voice/internal/llm"
 	texttospeech "com.deablabs.teno-voice/internal/textToSpeech"
 	"com.deablabs.teno-voice/internal/transcript"
-	"github.com/disgoorg/snowflake/v2"
 )
 
-type UserSpeakingState struct {
-	UserID     snowflake.ID
-	IsSpeaking bool
+type SleepModeType int
+
+const (
+	AlwaysSleep SleepModeType = iota
+	AutoSleep
+	NeverSleep
+)
+
+type ResponderConfig struct {
+	BotName                    string
+	SleepMode                  SleepModeType
+	LinesBeforeSleep           int
+	BotNameConfidenceThreshold float64
+	LLMService                 string
+	LLMModel                   string
+	TranscriptContextSize      int
 }
 
 type audioStreamWithIndex struct {
@@ -36,47 +47,39 @@ type audioStreamWithIndex struct {
 }
 
 type Responder struct {
-	transcript        *transcript.Transcript
-	playAudioChannel  chan []byte
-	audioStreamChan   chan audioStreamWithIndex
-	speakingStateChan chan UserSpeakingState
-	speakingUsers     map[snowflake.ID]struct{}
-	speakingUsersMu   sync.Mutex
-	isAnyUserSpeaking bool
-	sentenceChan      chan string
-	ttsService        texttospeech.TextToSpeechService
-	cancelResponse    context.CancelFunc
+	transcript             *transcript.Transcript
+	playAudioChannel       chan []byte
+	audioStreamChan        chan audioStreamWithIndex
+	sentenceChan           chan string
+	ttsService             texttospeech.TextToSpeechService
+	cancelResponse         context.CancelFunc
+	awake                  bool
+	linesSinceLastResponse int
+	responderConfig        ResponderConfig
 }
 
-func NewResponder(playAudioChannel chan []byte, ttsService texttospeech.TextToSpeechService) *Responder {
+func NewResponder(playAudioChannel chan []byte, ttsService texttospeech.TextToSpeechService, config ResponderConfig) *Responder {
 	responder := &Responder{
-		playAudioChannel:  playAudioChannel,
-		sentenceChan:      make(chan string, 100),
-		audioStreamChan:   make(chan audioStreamWithIndex, 100),
-		transcript:        transcript.NewTranscript(),
-		speakingStateChan: make(chan UserSpeakingState),
-		speakingUsers:     make(map[snowflake.ID]struct{}),
-		isAnyUserSpeaking: false,
-		ttsService:        ttsService,
-		cancelResponse:    nil,
+		playAudioChannel:       playAudioChannel,
+		sentenceChan:           make(chan string, 100),
+		audioStreamChan:        make(chan audioStreamWithIndex, 100),
+		transcript:             transcript.NewTranscript(),
+		ttsService:             ttsService,
+		cancelResponse:         nil,
+		awake:                  true,
+		linesSinceLastResponse: 0,
+		responderConfig:        config,
 	}
 
 	return responder
 }
 
-func (r *Responder) UpdateUserSpeakingState(userID snowflake.ID, isSpeaking bool) {
-	r.speakingUsersMu.Lock()
-	if isSpeaking {
-		r.speakingUsers[userID] = struct{}{}
-	} else {
-		delete(r.speakingUsers, userID)
-	}
+func (r *Responder) GetBotName() string {
+	return r.responderConfig.BotName
+}
 
-	r.isAnyUserSpeaking = len(r.speakingUsers) > 0
-	r.speakingUsersMu.Unlock()
-
-	log.Printf("Speaking users: %v\n", r.speakingUsers)
-	log.Printf("isAnyUserSpeaking: %v\n", r.isAnyUserSpeaking)
+func (r *Responder) SetSleepMode(mode SleepModeType) {
+	r.responderConfig.SleepMode = mode
 }
 
 func (r *Responder) synthesizeSentences(ctx context.Context) {
@@ -160,20 +163,45 @@ func (r *Responder) InterimTranscriptionReceived() {
 	}
 }
 
-func (r *Responder) NewTranscription(line string) {
+func (r *Responder) NewTranscription(line string, botNameSpoken float64) {
 	formattedLine := r.FormatLine("User", line, time.Now())
 	r.transcript.AddLine(formattedLine)
+	r.linesSinceLastResponse++
 
 	if r.cancelResponse != nil {
 		r.cancelResponse()
 	}
 
-	r.cancelResponse = r.Respond()
+	switch r.responderConfig.SleepMode {
+	case AlwaysSleep:
+		r.awake = false
+	case AutoSleep:
+		if r.linesSinceLastResponse > r.responderConfig.LinesBeforeSleep {
+			r.awake = false
+			log.Printf("Bot is asleep\n")
+		}
+
+		if botNameSpoken > r.responderConfig.BotNameConfidenceThreshold {
+			r.awake = true
+			r.linesSinceLastResponse = 0
+			log.Printf("Bot is awake\n")
+		}
+	case NeverSleep:
+		r.awake = true
+	}
+
+	// Only respond if the bot is awake
+	if r.awake {
+		r.cancelResponse = r.Respond()
+	}
 }
 
 func (r *Responder) botLineSpoken(line string) {
-	formattedLine := r.FormatLine("Bot", line, time.Now())
+	formattedLine := r.FormatLine(r.responderConfig.BotName, line, time.Now())
 	r.transcript.AddLine(formattedLine)
+
+	// Reset the counter when the bot speaks
+	r.linesSinceLastResponse = 0
 }
 
 func (r *Responder) Respond() context.CancelFunc {
@@ -181,14 +209,11 @@ func (r *Responder) Respond() context.CancelFunc {
 	r.sentenceChan = make(chan string)
 	r.audioStreamChan = make(chan audioStreamWithIndex)
 
-	// Create channel to signal end of token stream
-	// tokenStreamDone := make(chan struct{})
-
 	// Get recent lines of the transcript
-	lines := r.transcript.GetRecentLines(10)
+	lines := r.transcript.GetRecentLines(r.responderConfig.TranscriptContextSize)
 
 	// Start the goroutine to get a stream of tokens
-	go r.getTokenStream(ctx, lines, "openai", "gpt-3.5-turbo")
+	go r.getTokenStream(ctx, lines)
 
 	// Start the goroutine to synthesize the sentences into audio
 	go r.synthesizeSentences(ctx)
@@ -199,9 +224,9 @@ func (r *Responder) Respond() context.CancelFunc {
 	return cancelFunc
 }
 
-func (r *Responder) getTokenStream(ctx context.Context, lines string, service string, model string) {
+func (r *Responder) getTokenStream(ctx context.Context, lines string) {
 	// Create the chat completion stream
-	stream, err := llm.GetTranscriptResponseStream(lines, service, model)
+	stream, err := llm.GetTranscriptResponseStream(lines, r.responderConfig.LLMService, r.responderConfig.LLMModel, r.GetBotName())
 	if err != nil {
 		fmt.Printf("Token stream error: %v\n", err)
 		return
