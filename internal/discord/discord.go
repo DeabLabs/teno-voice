@@ -37,6 +37,7 @@ type CallStatus struct {
 
 type Speaker struct {
 	ID                  snowflake.ID
+	Username            string
 	transcriptionStream *websocket.Conn
 	Mu                  sync.Mutex
 	StreamContext       context.Context
@@ -55,7 +56,7 @@ func (s *Speaker) Init(ctx context.Context, responder *responder.Responder) {
 	s.ContextCancel = cancel
 	s.responder = responder
 
-	wsc, err := speechtotext.NewStream(s.StreamContext, s.Close, responder, s.ID)
+	wsc, err := speechtotext.NewStream(s.StreamContext, s.Close, responder, s.Username)
 
 	if err != nil {
 		panic("error getting transcription stream: " + err.Error())
@@ -169,9 +170,19 @@ func handleIncomingPackets(ctx context.Context, clientAdress *bot.Client, connec
 		// create a speaker for the user if one doesn't exist
 		newSpeakerMutex.Lock()
 		if _, ok := speakers[userID]; !ok {
+			var username string
+			user, err := client.Rest().GetMember(conn.GuildID(), userID)
+			if err != nil {
+				fmt.Printf("error getting user: %s", err)
+				username = "User"
+			} else {
+				username = user.User.Username
+			}
+
 			s := &Speaker{
-				ID: userID,
-				Mu: sync.Mutex{},
+				ID:       userID,
+				Mu:       sync.Mutex{},
+				Username: username,
 			}
 
 			speakers[userID] = s
@@ -222,14 +233,15 @@ func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 		Speakers := make(map[snowflake.ID]*Speaker)
 		playAudioChannel := make(chan []byte)
 		azureTTS := azure.NewAzureTTS()
+
 		// Create a responderConfig
 		responderConfig := responder.ResponderConfig{
 			BotName:                    "Teno",
 			SleepMode:                  responder.AutoSleep,
-			LinesBeforeSleep:           5,
+			LinesBeforeSleep:           3,
 			BotNameConfidenceThreshold: 0.7,
 			LLMService:                 "openai",
-			LLMModel:                   "gpt-3.5-turbo",
+			LLMModel:                   "gpt-4",
 			TranscriptContextSize:      20,
 		}
 

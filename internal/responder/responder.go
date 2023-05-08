@@ -163,8 +163,8 @@ func (r *Responder) InterimTranscriptionReceived() {
 	}
 }
 
-func (r *Responder) NewTranscription(line string, botNameSpoken float64) {
-	formattedLine := r.FormatLine("User", line, time.Now())
+func (r *Responder) NewTranscription(line string, botNameSpoken float64, username string) {
+	formattedLine := r.FormatLine(username, line, time.Now())
 	r.transcript.AddLine(formattedLine)
 	r.linesSinceLastResponse++
 
@@ -178,13 +178,13 @@ func (r *Responder) NewTranscription(line string, botNameSpoken float64) {
 	case AutoSleep:
 		if r.linesSinceLastResponse > r.responderConfig.LinesBeforeSleep {
 			r.awake = false
-			log.Printf("Bot is asleep\n")
+			// log.Printf("Bot is asleep\n")
 		}
 
 		if botNameSpoken > r.responderConfig.BotNameConfidenceThreshold {
 			r.awake = true
 			r.linesSinceLastResponse = 0
-			log.Printf("Bot is awake\n")
+			// log.Printf("Bot is awake\n")
 		}
 	case NeverSleep:
 		r.awake = true

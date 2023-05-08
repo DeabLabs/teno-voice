@@ -8,14 +8,13 @@ import (
 	"com.deablabs.teno-voice/internal/responder"
 	"com.deablabs.teno-voice/pkg/deepgram"
 	"github.com/Jeffail/gabs/v2"
-	"github.com/disgoorg/snowflake/v2"
 	"github.com/gorilla/websocket"
 )
 
 var dg = deepgram.NewClient(Config.Environment.DeepgramToken)
 
 // deepgram s2t sdk
-func NewStream(ctx context.Context, onClose func(), responder *responder.Responder, userID snowflake.ID) (*websocket.Conn, error) {
+func NewStream(ctx context.Context, onClose func(), responder *responder.Responder, username string) (*websocket.Conn, error) {
 	ws, _, err := dg.LiveTranscription(deepgram.LiveTranscriptionOptions{
 		Punctuate:       true,
 		Encoding:        "opus",
@@ -24,6 +23,8 @@ func NewStream(ctx context.Context, onClose func(), responder *responder.Respond
 		Interim_results: true,
 		Search:          []string{responder.GetBotName()},
 		Keywords:        []string{responder.GetBotName()},
+		Model:           "phonecall",
+		Tier:            "nova",
 	})
 
 	if err != nil {
@@ -74,7 +75,7 @@ func NewStream(ctx context.Context, onClose func(), responder *responder.Respond
 								}
 							}
 						}
-						responder.NewTranscription(transcription, botNameConfidence)
+						responder.NewTranscription(transcription, botNameConfidence, username)
 					}
 				}
 
