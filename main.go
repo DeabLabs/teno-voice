@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 
+	"com.deablabs.teno-voice/internal/auth"
 	Config "com.deablabs.teno-voice/internal/config"
 	"com.deablabs.teno-voice/internal/deps"
 	"com.deablabs.teno-voice/internal/discord"
@@ -33,6 +34,7 @@ func main() {
 
 	// Set up the router, connected to discord functionality
 	router := chi.NewRouter()
+	router.Use(auth.ApiKeyAuthMiddleware(Config.Environment.ApiKey))
 	router.Post("/join", discord.JoinVoiceCall(dependencies))
 	router.Post("/leave", discord.LeaveVoiceCall(dependencies))
 	router.Get("/transcript/{guild_id}", discord.TranscriptSSEHandler(dependencies))

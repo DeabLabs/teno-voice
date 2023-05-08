@@ -16,6 +16,8 @@ type Config struct {
 	OpenAIToken string `env:"OPENAI_TOKEN,required=true"`
 	// DeepgramToken is the token used to authenticate with Deepgram
 	DeepgramToken string `env:"DEEPGRAM_TOKEN,required=true"`
+	// ApiKey is the API key used to authenticate with this REST API from an external source
+	ApiKey string `env:"API_KEY,required=true"`
 }
 
 var Environment = New()
