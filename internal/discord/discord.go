@@ -17,6 +17,7 @@ import (
 	"github.com/disgoorg/disgo/bot"
 	"github.com/disgoorg/disgo/voice"
 	"github.com/disgoorg/snowflake/v2"
+	"github.com/go-chi/chi"
 	"github.com/gorilla/websocket"
 )
 
@@ -46,6 +47,7 @@ type Speaker struct {
 
 var connectionsMutex sync.Mutex
 var connections = make(map[snowflake.ID]voice.Conn)
+var transcriptSSEChannels = make(map[snowflake.ID]chan string)
 
 func (s *Speaker) Init(ctx context.Context, responder *responder.Responder) {
 	newContext, cancel := context.WithCancel(context.Background())
@@ -190,6 +192,7 @@ func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 		defer cancel()
 
 		guildID, channelID, err := decodeAndValidateRequest(w, r)
+
 		if err != nil {
 			w.Write([]byte(fmt.Sprintf("Could not join voice call: %s", err.Error())))
 			return
@@ -230,7 +233,13 @@ func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 			TranscriptContextSize:      20,
 		}
 
-		responder := responder.NewResponder(playAudioChannel, azureTTS, responderConfig)
+		// Make sse channel and store it in the map
+		transcriptSSEChannel := make(chan string)
+		connectionsMutex.Lock()
+		transcriptSSEChannels[guildID] = transcriptSSEChannel
+		connectionsMutex.Unlock()
+
+		responder := responder.NewResponder(playAudioChannel, azureTTS, responderConfig, transcriptSSEChannel)
 
 		go writeToVoiceConnection(&conn, playAudioChannel)
 
@@ -304,5 +313,50 @@ func LeaveVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 		conn.Close(ctx)
 
 		w.Write([]byte("Left voice call"))
+	})
+}
+
+func TranscriptSSEHandler(dependencies *deps.Deps) http.HandlerFunc {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		guildIDStr := chi.URLParam(r, "guild_id")
+
+		guildID, err := snowflake.Parse(guildIDStr)
+		if err != nil {
+			http.Error(w, "Invalid guild ID", http.StatusBadRequest)
+			return
+		}
+
+		connectionsMutex.Lock()
+		sseChannelForGuild, ok := transcriptSSEChannels[guildID]
+		connectionsMutex.Unlock()
+
+		if !ok {
+			http.Error(w, "No active SSE channels for this guild", http.StatusNotFound)
+			return
+		}
+
+		// Set the necessary headers for SSE
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+
+		// Use a flusher to send data immediately to the client
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "Streaming unsupported!", http.StatusInternalServerError)
+			return
+		}
+
+		// Listen for new transcript lines and send them to the client
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case transcriptLine := <-sseChannelForGuild:
+				fmt.Fprintf(w, "data: %s\n\n", transcriptLine)
+				flusher.Flush()
+			}
+		}
 	})
 }

@@ -35,6 +35,7 @@ func main() {
 	router := chi.NewRouter()
 	router.Post("/join", discord.JoinVoiceCall(dependencies))
 	router.Post("/leave", discord.LeaveVoiceCall(dependencies))
+	router.Get("/transcript/{guild_id}", discord.TranscriptSSEHandler(dependencies))
 
 	// Start the REST API server
 	log.Info("Starting REST API server on :8080")

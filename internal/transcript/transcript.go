@@ -5,17 +5,24 @@ import (
 )
 
 type Transcript struct {
-	lines           []string
+	lines                []string
+	transcriptSSEChannel chan string
 }
 
-func NewTranscript() *Transcript {
+func NewTranscript(transcriptSSEChannel chan string) *Transcript {
 	return &Transcript{
-		lines:           make([]string, 0),
+		lines:                make([]string, 0),
+		transcriptSSEChannel: transcriptSSEChannel,
 	}
 }
 
 func (t *Transcript) AddLine(line string) error {
 	t.lines = append(t.lines, line)
+
+	select {
+	case t.transcriptSSEChannel <- line:
+	default:
+	}
 
 	return nil
 }

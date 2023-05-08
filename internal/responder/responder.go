@@ -58,12 +58,12 @@ type Responder struct {
 	responderConfig        ResponderConfig
 }
 
-func NewResponder(playAudioChannel chan []byte, ttsService texttospeech.TextToSpeechService, config ResponderConfig) *Responder {
+func NewResponder(playAudioChannel chan []byte, ttsService texttospeech.TextToSpeechService, config ResponderConfig, transcriptSSEChannel chan string) *Responder {
 	responder := &Responder{
 		playAudioChannel:       playAudioChannel,
 		sentenceChan:           make(chan string, 100),
 		audioStreamChan:        make(chan audioStreamWithIndex, 100),
-		transcript:             transcript.NewTranscript(),
+		transcript:             transcript.NewTranscript(transcriptSSEChannel),
 		ttsService:             ttsService,
 		cancelResponse:         nil,
 		awake:                  true,
@@ -87,6 +87,11 @@ func (r *Responder) synthesizeSentences(ctx context.Context) {
 
 	sentenceIndex := 0
 	for sentence := range r.sentenceChan {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
 		log.Printf("Synthesizing sentence: %s\n", sentence)
 		opusPackets, err := r.ttsService.Synthesize(sentence)
 		if err != nil {
@@ -99,11 +104,6 @@ func (r *Responder) synthesizeSentences(ctx context.Context) {
 			sentence:    sentence,
 		}
 		sentenceIndex++
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
 	}
 }
 
