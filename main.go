@@ -8,6 +8,7 @@ import (
 	Config "com.deablabs.teno-voice/internal/config"
 	"com.deablabs.teno-voice/internal/deps"
 	"com.deablabs.teno-voice/internal/discord"
+	"com.deablabs.teno-voice/internal/redis"
 	"github.com/disgoorg/log"
 	"github.com/go-chi/chi"
 )
@@ -27,10 +28,16 @@ func main() {
 
 	defer closeClient()
 
+	redisAddr := Config.Environment.Redis
+
+	redisClient, redisCloseClient := redis.NewClient(context.Background(), redisAddr)
+
+	defer redisCloseClient()
+
 	// create a new instance of the Deps struct
 	// We pass this struct into the handlers so they can access the discord client
 	// and kill signal
-	dependencies := &deps.Deps{DiscordClient: &client}
+	dependencies := &deps.Deps{DiscordClient: &client, RedisClient: redisClient}
 
 	// Set up the router, connected to discord functionality
 	router := chi.NewRouter()

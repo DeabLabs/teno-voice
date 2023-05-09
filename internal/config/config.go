@@ -18,6 +18,8 @@ type Config struct {
 	DeepgramToken string `env:"DEEPGRAM_TOKEN,required=true"`
 	// ApiKey is the API key used to authenticate with this REST API from an external source
 	ApiKey string `env:"API_KEY,required=true"`
+	// Redis is the address of the Redis server
+	Redis string `env:"REDIS,required=true"`
 }
 
 var Environment = New()
