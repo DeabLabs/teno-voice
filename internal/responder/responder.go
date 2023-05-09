@@ -20,6 +20,8 @@ import (
 	"com.deablabs.teno-voice/internal/llm"
 	texttospeech "com.deablabs.teno-voice/internal/textToSpeech"
 	"com.deablabs.teno-voice/internal/transcript"
+	"github.com/disgoorg/snowflake/v2"
+	"github.com/redis/go-redis/v9"
 )
 
 type SleepModeType int
@@ -56,19 +58,21 @@ type Responder struct {
 	awake                  bool
 	linesSinceLastResponse int
 	responderConfig        ResponderConfig
+	botId                  snowflake.ID
 }
 
-func NewResponder(playAudioChannel chan []byte, ttsService texttospeech.TextToSpeechService, config ResponderConfig, transcriptSSEChannel chan string) *Responder {
+func NewResponder(playAudioChannel chan []byte, ttsService texttospeech.TextToSpeechService, config ResponderConfig, transcriptSSEChannel chan string, redisClient *redis.Client, redisTranscriptKey string, botId snowflake.ID) *Responder {
 	responder := &Responder{
 		playAudioChannel:       playAudioChannel,
 		sentenceChan:           make(chan string, 100),
 		audioStreamChan:        make(chan audioStreamWithIndex, 100),
-		transcript:             transcript.NewTranscript(transcriptSSEChannel),
+		transcript:             transcript.NewTranscript(transcriptSSEChannel, redisClient, redisTranscriptKey),
 		ttsService:             ttsService,
 		cancelResponse:         nil,
 		awake:                  true,
 		linesSinceLastResponse: 0,
 		responderConfig:        config,
+		botId:                  botId,
 	}
 
 	return responder
@@ -163,9 +167,15 @@ func (r *Responder) InterimTranscriptionReceived() {
 	}
 }
 
-func (r *Responder) NewTranscription(line string, botNameSpoken float64, username string) {
-	formattedLine := r.FormatLine(username, line, time.Now())
-	r.transcript.AddLine(formattedLine)
+func (r *Responder) NewTranscription(line string, botNameSpoken float64, username string, userId string) {
+	newLine := &transcript.Line{
+		Text:     line,
+		Username: username,
+		UserId:   userId,
+		Time:     time.Now(),
+	}
+
+	r.transcript.AddLine(newLine)
 	r.linesSinceLastResponse++
 
 	if r.cancelResponse != nil {
@@ -197,8 +207,13 @@ func (r *Responder) NewTranscription(line string, botNameSpoken float64, usernam
 }
 
 func (r *Responder) botLineSpoken(line string) {
-	formattedLine := r.FormatLine(r.responderConfig.BotName, line, time.Now())
-	r.transcript.AddLine(formattedLine)
+	newLine := &transcript.Line{
+		Text:     line,
+		Username: r.responderConfig.BotName,
+		UserId:   r.botId.String(),
+		Time:     time.Now(),
+	}
+	r.transcript.AddLine(newLine)
 
 	// Reset the counter when the bot speaks
 	r.linesSinceLastResponse = 0
@@ -361,9 +376,4 @@ func (r *Responder) playTextInVoiceChannel(line string) {
 
 func (r *Responder) GetTranscript() *transcript.Transcript {
 	return r.transcript
-}
-
-// Format the line for the transcript, including the username, the line spoken, and the human readable timestamp
-func (r *Responder) FormatLine(username string, line string, timestamp time.Time) string {
-	return fmt.Sprintf("[%s] %s: %s", timestamp.Format("15:04:05"), username, line)
 }

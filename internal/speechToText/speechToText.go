@@ -14,7 +14,7 @@ import (
 var dg = deepgram.NewClient(Config.Environment.DeepgramToken)
 
 // deepgram s2t sdk
-func NewStream(ctx context.Context, onClose func(), responder *responder.Responder, username string) (*websocket.Conn, error) {
+func NewStream(ctx context.Context, onClose func(), responder *responder.Responder, username string, userId string) (*websocket.Conn, error) {
 	ws, _, err := dg.LiveTranscription(deepgram.LiveTranscriptionOptions{
 		Punctuate:       true,
 		Encoding:        "opus",
@@ -37,6 +37,7 @@ func NewStream(ctx context.Context, onClose func(), responder *responder.Respond
 			select {
 			default:
 				_, message, err := ws.ReadMessage()
+
 				if err != nil {
 					// log.Println("Deepgram stream closed: ", err)
 
@@ -75,7 +76,7 @@ func NewStream(ctx context.Context, onClose func(), responder *responder.Respond
 								}
 							}
 						}
-						responder.NewTranscription(transcription, botNameConfidence, username)
+						responder.NewTranscription(transcription, botNameConfidence, username, userId)
 					}
 				}
 

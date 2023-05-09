@@ -7,9 +7,12 @@ import (
 )
 
 func NewClient(ctx context.Context, addr string) (client *redis.Client, close func()) {
-	rdb := redis.NewClient(&redis.Options{
-		Addr: addr,
-	})
+	opt, err := redis.ParseURL(addr)
+	if err != nil {
+		panic(err)
+	}
+
+	rdb := redis.NewClient(opt)
 
 	close = func() {
 		rdb.Close()

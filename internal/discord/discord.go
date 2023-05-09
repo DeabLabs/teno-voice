@@ -22,8 +22,33 @@ import (
 )
 
 type JoinRequest struct {
-	GuildID   string
-	ChannelID string
+	GuildID            string
+	ChannelID          string
+	RedisTranscriptKey string
+}
+
+func (jr *JoinRequest) validateAndParse() (ValidatedJoinRequest, error) {
+	guildID, err := snowflake.Parse(jr.GuildID)
+	if err != nil {
+		return ValidatedJoinRequest{}, fmt.Errorf("error parsing guildID: %s", err.Error())
+	}
+
+	channelID, err := snowflake.Parse(jr.ChannelID)
+	if err != nil {
+		return ValidatedJoinRequest{}, fmt.Errorf("error parsing channelID: %s", err.Error())
+	}
+
+	return ValidatedJoinRequest{
+		GuildID:            guildID,
+		ChannelID:          channelID,
+		RedisTranscriptKey: jr.RedisTranscriptKey,
+	}, nil
+}
+
+type ValidatedJoinRequest struct {
+	GuildID            snowflake.ID
+	ChannelID          snowflake.ID
+	RedisTranscriptKey string
 }
 
 type LeaveRequest struct {
@@ -56,7 +81,7 @@ func (s *Speaker) Init(ctx context.Context, responder *responder.Responder) {
 	s.ContextCancel = cancel
 	s.responder = responder
 
-	wsc, err := speechtotext.NewStream(s.StreamContext, s.Close, responder, s.Username)
+	wsc, err := speechtotext.NewStream(s.StreamContext, s.Close, responder, s.Username, s.ID.String())
 
 	if err != nil {
 		panic("error getting transcription stream: " + err.Error())
@@ -86,30 +111,25 @@ func (s *Speaker) AddPacket(ctx context.Context, packet []byte) {
 	s.transcriptionStream.WriteMessage(websocket.BinaryMessage, packet)
 }
 
-func decodeAndValidateRequest(w http.ResponseWriter, r *http.Request) (snowflake.ID, snowflake.ID, error) {
+func decodeAndValidateRequest(w http.ResponseWriter, r *http.Request) (ValidatedJoinRequest, error) {
 	var jr JoinRequest
 
 	err := helpers.DecodeJSONBody(w, r, &jr)
 	if err != nil {
 		var mr *helpers.MalformedRequest
 		if errors.As(err, &mr) {
-			return 0, 0, fmt.Errorf(mr.Msg)
+			return ValidatedJoinRequest{}, fmt.Errorf(mr.Msg)
 		} else {
-			return 0, 0, fmt.Errorf(http.StatusText(http.StatusInternalServerError)+": %s", err.Error())
+			return ValidatedJoinRequest{}, fmt.Errorf(http.StatusText(http.StatusInternalServerError)+": %s", err.Error())
 		}
 	}
 
-	guildID, err := snowflake.Parse(jr.GuildID)
+	validatedRequest, err := jr.validateAndParse()
 	if err != nil {
-		return 0, 0, fmt.Errorf("error parsing guildID: %s", err.Error())
+		return ValidatedJoinRequest{}, err
 	}
 
-	channelID, err := snowflake.Parse(jr.ChannelID)
-	if err != nil {
-		return 0, 0, fmt.Errorf("error parsing channelID: %s", err.Error())
-	}
-
-	return guildID, channelID, nil
+	return validatedRequest, nil
 }
 
 func setupVoiceConnection(ctx context.Context, clientAdress *bot.Client, guildID, channelID snowflake.ID) (voice.Conn, error) {
@@ -202,15 +222,15 @@ func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 		ctx, cancel := context.WithTimeout(ctx, time.Second*5)
 		defer cancel()
 
-		guildID, channelID, err := decodeAndValidateRequest(w, r)
+		joinParams, err := decodeAndValidateRequest(w, r)
 
 		if err != nil {
 			w.Write([]byte(fmt.Sprintf("Could not join voice call: %s", err.Error())))
 			return
 		}
 
-		client := *dependencies.DiscordClient
-		conn, err := setupVoiceConnection(ctx, &client, guildID, channelID)
+		discordClient := *dependencies.DiscordClient
+		conn, err := setupVoiceConnection(ctx, &discordClient, joinParams.GuildID, joinParams.ChannelID)
 
 		if err != nil {
 			w.Write([]byte(fmt.Sprintf("Could not join voice call: %s", err.Error())))
@@ -219,7 +239,7 @@ func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 
 		// Store the connection in the connections map.
 		connectionsMutex.Lock()
-		connections[guildID] = conn
+		connections[joinParams.GuildID] = conn
 		connectionsMutex.Unlock()
 
 		if err := conn.SetSpeaking(ctx, voice.SpeakingFlagMicrophone); err != nil {
@@ -234,29 +254,31 @@ func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 		playAudioChannel := make(chan []byte)
 		azureTTS := azure.NewAzureTTS()
 
+		redisClient := *dependencies.RedisClient
+
 		// Create a responderConfig
 		responderConfig := responder.ResponderConfig{
 			BotName:                    "Teno",
 			SleepMode:                  responder.AutoSleep,
-			LinesBeforeSleep:           3,
+			LinesBeforeSleep:           4,
 			BotNameConfidenceThreshold: 0.7,
 			LLMService:                 "openai",
-			LLMModel:                   "gpt-4",
+			LLMModel:                   "gpt-3.5-turbo",
 			TranscriptContextSize:      20,
 		}
 
 		// Make sse channel and store it in the map
 		transcriptSSEChannel := make(chan string)
 		connectionsMutex.Lock()
-		transcriptSSEChannels[guildID] = transcriptSSEChannel
+		transcriptSSEChannels[joinParams.GuildID] = transcriptSSEChannel
 		connectionsMutex.Unlock()
 
-		responder := responder.NewResponder(playAudioChannel, azureTTS, responderConfig, transcriptSSEChannel)
+		responder := responder.NewResponder(playAudioChannel, azureTTS, responderConfig, transcriptSSEChannel, &redisClient, joinParams.RedisTranscriptKey, discordClient.ID())
 
 		go writeToVoiceConnection(&conn, playAudioChannel)
 
 		newSpeakerMutex := sync.Mutex{}
-		go handleIncomingPackets(ctx, &client, &conn, Speakers, &newSpeakerMutex, responder)
+		go handleIncomingPackets(ctx, &discordClient, &conn, Speakers, &newSpeakerMutex, responder)
 
 		// Create a channel to wait for a signal to close the connection.
 		closeSignal := make(chan struct{})
