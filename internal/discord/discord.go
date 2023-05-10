@@ -25,6 +25,7 @@ type JoinRequest struct {
 	GuildID            string
 	ChannelID          string
 	RedisTranscriptKey string
+	ResponderConfig    responder.ResponderConfig
 }
 
 func (jr *JoinRequest) validateAndParse() (ValidatedJoinRequest, error) {
@@ -42,6 +43,7 @@ func (jr *JoinRequest) validateAndParse() (ValidatedJoinRequest, error) {
 		GuildID:            guildID,
 		ChannelID:          channelID,
 		RedisTranscriptKey: jr.RedisTranscriptKey,
+		ResponderConfig:    jr.ResponderConfig,
 	}, nil
 }
 
@@ -49,6 +51,7 @@ type ValidatedJoinRequest struct {
 	GuildID            snowflake.ID
 	ChannelID          snowflake.ID
 	RedisTranscriptKey string
+	ResponderConfig    responder.ResponderConfig
 }
 
 type LeaveRequest struct {
@@ -107,29 +110,28 @@ func (s *Speaker) AddPacket(ctx context.Context, packet []byte) {
 		s.Init(ctx, s.responder)
 	}
 
-	// convert the opus packet to pcm ogg
 	s.transcriptionStream.WriteMessage(websocket.BinaryMessage, packet)
 }
 
-func decodeAndValidateRequest(w http.ResponseWriter, r *http.Request) (ValidatedJoinRequest, error) {
+func decodeAndValidateRequest(w http.ResponseWriter, r *http.Request) (ValidatedJoinRequest, responder.ResponderConfig, error) {
 	var jr JoinRequest
 
 	err := helpers.DecodeJSONBody(w, r, &jr)
 	if err != nil {
 		var mr *helpers.MalformedRequest
 		if errors.As(err, &mr) {
-			return ValidatedJoinRequest{}, fmt.Errorf(mr.Msg)
+			return ValidatedJoinRequest{}, responder.ResponderConfig{}, fmt.Errorf(mr.Msg)
 		} else {
-			return ValidatedJoinRequest{}, fmt.Errorf(http.StatusText(http.StatusInternalServerError)+": %s", err.Error())
+			return ValidatedJoinRequest{}, responder.ResponderConfig{}, fmt.Errorf(http.StatusText(http.StatusInternalServerError)+": %s", err.Error())
 		}
 	}
 
 	validatedRequest, err := jr.validateAndParse()
 	if err != nil {
-		return ValidatedJoinRequest{}, err
+		return ValidatedJoinRequest{}, responder.ResponderConfig{}, err
 	}
 
-	return validatedRequest, nil
+	return validatedRequest, jr.ResponderConfig, nil
 }
 
 func setupVoiceConnection(ctx context.Context, clientAdress *bot.Client, guildID, channelID snowflake.ID) (voice.Conn, error) {
@@ -222,7 +224,7 @@ func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 		ctx, cancel := context.WithTimeout(ctx, time.Second*5)
 		defer cancel()
 
-		joinParams, err := decodeAndValidateRequest(w, r)
+		joinParams, responderConfig, err := decodeAndValidateRequest(w, r)
 
 		if err != nil {
 			w.Write([]byte(fmt.Sprintf("Could not join voice call: %s", err.Error())))
@@ -255,17 +257,6 @@ func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 		azureTTS := azure.NewAzureTTS()
 
 		redisClient := *dependencies.RedisClient
-
-		// Create a responderConfig
-		responderConfig := responder.ResponderConfig{
-			BotName:                    "Teno",
-			SleepMode:                  responder.AutoSleep,
-			LinesBeforeSleep:           4,
-			BotNameConfidenceThreshold: 0.7,
-			LLMService:                 "openai",
-			LLMModel:                   "gpt-3.5-turbo",
-			TranscriptContextSize:      20,
-		}
 
 		// Make sse channel and store it in the map
 		transcriptSSEChannel := make(chan string)

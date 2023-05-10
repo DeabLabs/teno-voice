@@ -40,6 +40,8 @@ type ResponderConfig struct {
 	LLMService                 string
 	LLMModel                   string
 	TranscriptContextSize      int
+	IgnoreUser                 string
+	IncludeUser                string
 }
 
 type audioStreamWithIndex struct {
