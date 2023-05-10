@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"com.deablabs.teno-voice/internal/auth"
+	"com.deablabs.teno-voice/internal/calls"
 	Config "com.deablabs.teno-voice/internal/config"
 	"com.deablabs.teno-voice/internal/deps"
 	"com.deablabs.teno-voice/internal/discord"
@@ -42,10 +43,10 @@ func main() {
 	// Set up the router, connected to discord functionality
 	router := chi.NewRouter()
 	router.Use(auth.ApiKeyAuthMiddleware(Config.Environment.ApiKey))
-	router.Post("/join", discord.JoinVoiceCall(dependencies))
-	router.Post("/leave", discord.LeaveVoiceCall(dependencies))
-	router.Get("/transcript/{guild_id}", discord.TranscriptSSEHandler(dependencies))
-	// router.Get("/config/{guild_id}", discord.ConfigResponder(dependencies))
+	router.Post("/join", calls.JoinVoiceCall(dependencies))
+	router.Post("/leave", calls.LeaveVoiceCall(dependencies))
+	router.Get("/transcript/{guild_id}", calls.TranscriptSSEHandler(dependencies))
+	router.Get("/config/{guild_id}", calls.ConfigResponder(dependencies))
 
 	// Start the REST API server
 	log.Info("Starting REST API server on :8080")

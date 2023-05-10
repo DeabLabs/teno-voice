@@ -26,7 +26,8 @@ import (
 type SleepModeType int
 
 const (
-	AlwaysSleep SleepModeType = iota
+	Unspecified SleepModeType = iota
+	AlwaysSleep
 	AutoSleep
 	NeverSleep
 )
@@ -39,8 +40,6 @@ type ResponderConfig struct {
 	LLMService                 string
 	LLMModel                   string
 	TranscriptContextSize      int
-	IgnoreUser                 string
-	IncludeUser                string
 }
 
 type audioStreamWithIndex struct {
@@ -197,7 +196,7 @@ func (r *Responder) NewTranscription(line string, botNameSpoken float64, usernam
 			r.linesSinceLastResponse = 0
 			// log.Printf("Bot is awake\n")
 		}
-	case NeverSleep:
+	default:
 		r.awake = true
 	}
 
@@ -377,4 +376,36 @@ func (r *Responder) playTextInVoiceChannel(line string) {
 
 func (r *Responder) GetTranscript() *transcript.Transcript {
 	return r.transcript
+}
+
+func (r *Responder) Configure(newConfig ResponderConfig) error {
+	if newConfig.BotName != "" {
+		r.responderConfig.BotName = newConfig.BotName
+	}
+
+	if newConfig.SleepMode != 0 {
+		r.responderConfig.SleepMode = newConfig.SleepMode
+	}
+
+	if newConfig.LinesBeforeSleep != 0 {
+		r.responderConfig.LinesBeforeSleep = newConfig.LinesBeforeSleep
+	}
+
+	if newConfig.BotNameConfidenceThreshold != 0 {
+		r.responderConfig.BotNameConfidenceThreshold = newConfig.BotNameConfidenceThreshold
+	}
+
+	if newConfig.LLMService != "" {
+		r.responderConfig.LLMService = newConfig.LLMService
+	}
+
+	if newConfig.LLMModel != "" {
+		r.responderConfig.LLMModel = newConfig.LLMModel
+	}
+
+	if newConfig.TranscriptContextSize != 0 {
+		r.responderConfig.TranscriptContextSize = newConfig.TranscriptContextSize
+	}
+
+	return nil
 }
