@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"math"
 	"strings"
 	"time"
@@ -98,7 +97,7 @@ func (r *Responder) synthesizeSentences(ctx context.Context) {
 			return
 		default:
 		}
-		log.Printf("Synthesizing sentence: %s\n", sentence)
+		// log.Printf("Synthesizing sentence: %s\n", sentence)
 		opusPackets, err := r.ttsService.Synthesize(sentence)
 		if err != nil {
 			fmt.Printf("Error generating speech: %v\n", err)
