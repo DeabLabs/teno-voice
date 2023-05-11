@@ -93,7 +93,7 @@ func (t *Transcript) SendLineToRedis(line Line, formattedLine string) error {
 
 // Format the line for the transcript, including the username, the line spoken, and the human readable timestamp
 func formatLine(line Line) string {
-	return fmt.Sprintf("[%s] %s: %s", line.Time.Format("15:04:05"), line.Username, line.Text)
+	return fmt.Sprintf("[%s] %s: %s", line.Time.Format("15:04:05"), line.Username, strings.TrimSpace(line.Text))
 }
 
 // Format should be <userId>formattedText<timestamp in float64>
