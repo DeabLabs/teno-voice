@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -98,5 +99,5 @@ func formatLine(line Line) string {
 
 // Format should be <userId>formattedText<timestamp in float64>
 func formatForRedis(line Line, formattedText string) string {
-	return fmt.Sprintf("<%s>%s<%f>", line.UserId, formattedText, float64(line.Time.UnixMilli()))
+	return fmt.Sprintf("<%s>%s<%s>", line.UserId, formattedText, strconv.Itoa(int(line.Time.UnixMilli())))
 }
