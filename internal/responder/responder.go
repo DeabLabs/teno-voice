@@ -25,10 +25,11 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-type SleepModeType int
+type SpeakingModeType int
 
 const (
-	Unspecified SleepModeType = iota
+	Unspecified SpeakingModeType = iota
+	NeverSpeak
 	AlwaysSleep
 	AutoSleep
 	NeverSleep
@@ -37,7 +38,7 @@ const (
 type ResponderConfig struct {
 	BotName                    string
 	Personality                string
-	SleepMode                  SleepModeType
+	SpeakingMode               SpeakingModeType
 	LinesBeforeSleep           int
 	BotNameConfidenceThreshold float64
 	LLMService                 string
@@ -91,8 +92,8 @@ func (r *Responder) GetBotName() string {
 	return r.responderConfig.BotName
 }
 
-func (r *Responder) SetSleepMode(mode SleepModeType) {
-	r.responderConfig.SleepMode = mode
+func (r *Responder) SetSpeakingMode(mode SpeakingModeType) {
+	r.responderConfig.SpeakingMode = mode
 }
 
 func (r *Responder) synthesizeSentences(ctx context.Context) {
@@ -208,7 +209,9 @@ func (r *Responder) NewTranscription(line string, botNameSpoken float64, usernam
 		r.cancelResponse()
 	}
 
-	switch r.responderConfig.SleepMode {
+	switch r.responderConfig.SpeakingMode {
+	case NeverSpeak:
+		return
 	case AlwaysSleep:
 		r.awake = false
 	case AutoSleep:
@@ -222,7 +225,7 @@ func (r *Responder) NewTranscription(line string, botNameSpoken float64, usernam
 			r.linesSinceLastResponse = 0
 			// log.Printf("Bot is awake\n")
 		}
-	default:
+	default: // AlwaysSpeak
 		r.awake = true
 	}
 
@@ -397,8 +400,8 @@ func (r *Responder) Configure(newConfig ResponderConfig) error {
 		r.responderConfig.Personality = newConfig.Personality
 	}
 
-	if newConfig.SleepMode != 0 {
-		r.responderConfig.SleepMode = newConfig.SleepMode
+	if newConfig.SpeakingMode != 0 {
+		r.responderConfig.SpeakingMode = newConfig.SpeakingMode
 	}
 
 	if newConfig.LinesBeforeSleep != 0 {
