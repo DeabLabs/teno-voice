@@ -118,7 +118,7 @@ func (r *Responder) synthesizeSentences(ctx context.Context) {
 func (r *Responder) playSynthesizedSentences(ctx context.Context, receivedTranscriptionTime time.Time) {
 	audioStreamMap := make(map[int]io.ReadCloser)
 	nextAudioIndex := 0
-	bytesToDiscard := 1000 // Adjust this value based on how much you want to trim from the beginning
+	bytesToDiscard := 1700 // Adjust this value based on how much you want to trim from the beginning
 
 	firstSentence := true
 
@@ -143,7 +143,6 @@ func (r *Responder) playSynthesizedSentences(ctx context.Context, receivedTransc
 
 			// Discard bytes from the beginning of the audio stream
 			if err := r.discardBytes(opusPackets, bytesToDiscard); err != nil {
-				fmt.Printf("Error discarding bytes: %s\n", err)
 				break
 			}
 
@@ -177,8 +176,7 @@ func (r *Responder) playSynthesizedSentences(ctx context.Context, receivedTransc
 			delete(audioStreamMap, nextAudioIndex)
 			nextAudioIndex++
 		}
-
-		r.sendSilentFrames(5)
+		r.sendSilentFrames(1)
 		r.setSpeaking(false)
 	}
 }
