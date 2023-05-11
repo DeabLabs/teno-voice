@@ -43,6 +43,8 @@ type ResponderConfig struct {
 	LLMService                 string
 	LLMModel                   string
 	TranscriptContextSize      int
+	IgnoreUser                 string
+	StopIgnoringUser           string
 }
 
 type audioStreamWithIndex struct {
@@ -63,6 +65,7 @@ type Responder struct {
 	linesSinceLastResponse int
 	responderConfig        ResponderConfig
 	botId                  snowflake.ID
+	ignoredUsers           map[string]struct{}
 }
 
 func NewResponder(playAudioChannel chan []byte, conn *voice.Conn, ttsService texttospeech.TextToSpeechService, config ResponderConfig, transcriptSSEChannel chan string, redisClient *redis.Client, redisTranscriptKey string, botId snowflake.ID) *Responder {
@@ -78,6 +81,7 @@ func NewResponder(playAudioChannel chan []byte, conn *voice.Conn, ttsService tex
 		linesSinceLastResponse: 0,
 		responderConfig:        config,
 		botId:                  botId,
+		ignoredUsers:           make(map[string]struct{}),
 	}
 
 	return responder
@@ -417,6 +421,14 @@ func (r *Responder) Configure(newConfig ResponderConfig) error {
 		r.responderConfig.TranscriptContextSize = newConfig.TranscriptContextSize
 	}
 
+	if newConfig.IgnoreUser != "" {
+		r.ignoredUsers[newConfig.IgnoreUser] = struct{}{}
+	}
+
+	if newConfig.StopIgnoringUser != "" {
+		delete(r.ignoredUsers, newConfig.StopIgnoringUser)
+	}
+
 	return nil
 }
 
@@ -446,4 +458,10 @@ func (r *Responder) sendSilentFrames(frames int) {
 		// Send the payload to the playAudioChannel
 		r.playAudioChannel <- silenceOpusFrame
 	}
+}
+
+// IsIgnored checks if a user is ignored
+func (r *Responder) IsIgnored(userId string) bool {
+	_, ok := r.ignoredUsers[userId]
+	return ok
 }

@@ -133,6 +133,11 @@ func HandleIncomingPackets(ctx context.Context, clientAdress *bot.Client, connec
 				continue
 			}
 
+			// ignore packets from the responder's ignore list
+			if responder.IsIgnored(userID.String()) {
+				continue
+			}
+
 			// create a speaker for the user if one doesn't exist
 			newSpeakerMutex.Lock()
 			if _, ok := speakers[userID]; !ok {
