@@ -77,18 +77,30 @@ func SetupVoiceConnection(ctx context.Context, clientAdress *bot.Client, guildID
 
 func WriteToVoiceConnection(ctx context.Context, connection *voice.Conn, playAudioChannel chan []byte) {
 	conn := *connection
-	ticker := time.NewTicker(20 * time.Millisecond)
-	defer ticker.Stop()
 
-	for range ticker.C {
+	lastFrameSent := time.Now()
+
+	for {
 		select {
 		case audioBytes, ok := <-playAudioChannel:
 			if !ok {
 				return
 			}
+
+			// Write audio bytes to UDP connection
 			if _, err := conn.UDP().Write(audioBytes); err != nil {
 				fmt.Printf("error sending audio bytes: %s\n", err)
 			}
+
+			// Calculate sleep time
+			sleepTime := 20*time.Millisecond - time.Since(lastFrameSent)
+			if sleepTime > 0 {
+				time.Sleep(sleepTime)
+			}
+
+			// Update the lastFrameSent timestamp
+			lastFrameSent = time.Now()
+
 		case <-ctx.Done():
 			return
 		}

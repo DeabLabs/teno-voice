@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"strings"
 	"time"
 	"unicode"
@@ -19,6 +20,7 @@ import (
 	"com.deablabs.teno-voice/internal/llm"
 	texttospeech "com.deablabs.teno-voice/internal/textToSpeech"
 	"com.deablabs.teno-voice/internal/transcript"
+	"github.com/disgoorg/disgo/voice"
 	"github.com/disgoorg/snowflake/v2"
 	"github.com/redis/go-redis/v9"
 )
@@ -51,6 +53,7 @@ type audioStreamWithIndex struct {
 type Responder struct {
 	transcript             *transcript.Transcript
 	playAudioChannel       chan []byte
+	conn                   voice.Conn
 	audioStreamChan        chan audioStreamWithIndex
 	sentenceChan           chan string
 	ttsService             texttospeech.TextToSpeechService
@@ -61,10 +64,11 @@ type Responder struct {
 	botId                  snowflake.ID
 }
 
-func NewResponder(playAudioChannel chan []byte, ttsService texttospeech.TextToSpeechService, config ResponderConfig, transcriptSSEChannel chan string, redisClient *redis.Client, redisTranscriptKey string, botId snowflake.ID) *Responder {
+func NewResponder(playAudioChannel chan []byte, conn *voice.Conn, ttsService texttospeech.TextToSpeechService, config ResponderConfig, transcriptSSEChannel chan string, redisClient *redis.Client, redisTranscriptKey string, botId snowflake.ID) *Responder {
 	responder := &Responder{
 		playAudioChannel:       playAudioChannel,
-		sentenceChan:           make(chan string, 100),
+		conn:                   *conn,
+		sentenceChan:           make(chan string),
 		audioStreamChan:        make(chan audioStreamWithIndex, 100),
 		transcript:             transcript.NewTranscript(transcriptSSEChannel, redisClient, redisTranscriptKey),
 		ttsService:             ttsService,
@@ -96,7 +100,6 @@ func (r *Responder) synthesizeSentences(ctx context.Context) {
 			return
 		default:
 		}
-		// log.Printf("Synthesizing sentence: %s\n", sentence)
 		opusPackets, err := r.ttsService.Synthesize(sentence)
 		if err != nil {
 			fmt.Printf("Error generating speech: %v\n", err)
@@ -111,14 +114,25 @@ func (r *Responder) synthesizeSentences(ctx context.Context) {
 	}
 }
 
-func (r *Responder) playSynthesizedSentences(ctx context.Context) {
+func (r *Responder) playSynthesizedSentences(ctx context.Context, receivedTranscriptionTime time.Time) {
 	audioStreamMap := make(map[int]io.ReadCloser)
 	nextAudioIndex := 0
 	bytesToDiscard := 1000 // Adjust this value based on how much you want to trim from the beginning
 
+	firstSentence := true
+
 	for audioStreamWithIndex := range r.audioStreamChan {
 		audioStreamMap[audioStreamWithIndex.index] = audioStreamWithIndex.opusPackets
 		sentence := audioStreamWithIndex.sentence
+
+		r.setSpeaking(true)
+
+		if firstSentence {
+			transcriptionToResponseLatency := time.Since(receivedTranscriptionTime)
+			// Print latency in milliseconds
+			fmt.Printf("Transcription to response latency: %.0f ms\n", transcriptionToResponseLatency.Seconds()*1000)
+			firstSentence = false
+		}
 
 		for {
 			opusPackets, ok := audioStreamMap[nextAudioIndex]
@@ -133,10 +147,12 @@ func (r *Responder) playSynthesizedSentences(ctx context.Context) {
 			}
 
 			// Use a buffer to read the packets and send them to the playAudioChannel
-			buf := make([]byte, 4096)
+			buf := make([]byte, 8192)
 			for {
 				select {
 				case <-ctx.Done():
+					r.sendSilentFrames(5)
+					r.setSpeaking(false)
 					return
 				default:
 				}
@@ -148,6 +164,8 @@ func (r *Responder) playSynthesizedSentences(ctx context.Context) {
 					}
 					break
 				}
+
+				// Send the payload to the playAudioChannel
 				r.playAudioChannel <- buf[:n]
 			}
 			opusPackets.Close() // Close the opusPackets after playing
@@ -158,6 +176,9 @@ func (r *Responder) playSynthesizedSentences(ctx context.Context) {
 			delete(audioStreamMap, nextAudioIndex)
 			nextAudioIndex++
 		}
+
+		r.sendSilentFrames(5)
+		r.setSpeaking(false)
 	}
 }
 
@@ -168,6 +189,8 @@ func (r *Responder) InterimTranscriptionReceived() {
 }
 
 func (r *Responder) NewTranscription(line string, botNameSpoken float64, username string, userId string) {
+	receivedTranscriptionTime := time.Now()
+
 	newLine := &transcript.Line{
 		Text:     line,
 		Username: username,
@@ -202,7 +225,7 @@ func (r *Responder) NewTranscription(line string, botNameSpoken float64, usernam
 
 	// Only respond if the bot is awake
 	if r.awake {
-		r.cancelResponse = r.Respond()
+		r.cancelResponse = r.Respond(receivedTranscriptionTime)
 	}
 }
 
@@ -219,7 +242,7 @@ func (r *Responder) botLineSpoken(line string) {
 	r.linesSinceLastResponse = 0
 }
 
-func (r *Responder) Respond() context.CancelFunc {
+func (r *Responder) Respond(receivedTranscriptionTime time.Time) context.CancelFunc {
 	ctx, cancelFunc := context.WithCancel(context.Background())
 	r.sentenceChan = make(chan string)
 	r.audioStreamChan = make(chan audioStreamWithIndex)
@@ -234,7 +257,7 @@ func (r *Responder) Respond() context.CancelFunc {
 	go r.synthesizeSentences(ctx)
 
 	// Start the goroutine to play the synthesized sentences
-	go r.playSynthesizedSentences(ctx)
+	go r.playSynthesizedSentences(ctx, receivedTranscriptionTime)
 
 	return cancelFunc
 }
@@ -338,7 +361,13 @@ func startsWithWhitespace(token string) bool {
 }
 
 func (r *Responder) discardBytes(reader io.Reader, bytesToDiscard int) error {
-	buf := make([]byte, 4096)
+	buf := make([]byte, 8192)
+
+	// If the reader is a net.Conn, set a read deadline
+	if conn, ok := reader.(net.Conn); ok {
+		deadline := time.Now().Add(5 * time.Second) // Adjust the timeout as needed
+		conn.SetReadDeadline(deadline)
+	}
 
 	for bytesToDiscard > 0 {
 		n := int(math.Min(float64(cap(buf)), float64(bytesToDiscard)))
@@ -350,28 +379,6 @@ func (r *Responder) discardBytes(reader io.Reader, bytesToDiscard int) error {
 	}
 
 	return nil
-}
-
-func (r *Responder) playTextInVoiceChannel(line string) {
-	opusReader, err := r.ttsService.Synthesize(line)
-	if err != nil {
-		fmt.Printf("Error generating speech: %v", err)
-		return
-	}
-	defer opusReader.Close()
-
-	buf := make([]byte, 4096) // adjust the buffer size if needed
-	for {
-		n, err := opusReader.Read(buf)
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			fmt.Printf("Error reading Opus packet: %s", err)
-			return
-		}
-		r.playAudioChannel <- buf[:n]
-	}
 }
 
 func (r *Responder) GetTranscript() *transcript.Transcript {
@@ -408,4 +415,32 @@ func (r *Responder) Configure(newConfig ResponderConfig) error {
 	}
 
 	return nil
+}
+
+func (r *Responder) setSpeaking(speaking bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if speaking {
+		err := r.conn.SetSpeaking(ctx, voice.SpeakingFlagMicrophone)
+		if err != nil {
+			fmt.Printf("Error setting speaking on: %s\n", err)
+		}
+	} else {
+		err := r.conn.SetSpeaking(ctx, voice.SpeakingFlagNone)
+		if err != nil {
+			fmt.Printf("Error setting speaking off: %s\n", err)
+		}
+	}
+}
+
+func (r *Responder) sendSilentFrames(frames int) {
+	// Define silence Opus frame
+	silenceOpusFrame := []byte{0xF8, 0xFF, 0xFE}
+
+	// Send silent frames after finishing each sentence
+	for i := 0; i < frames; i++ {
+		// Send the payload to the playAudioChannel
+		r.playAudioChannel <- silenceOpusFrame
+	}
 }

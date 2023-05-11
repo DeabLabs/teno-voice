@@ -126,6 +126,7 @@ func NewOpusPacketReader(reader io.ReadCloser) *OpusPacketReader {
 		packetChan:  make(chan []byte),
 		errChan:     make(chan error),
 		closeSignal: make(chan struct{}),
+		lastRead:    time.Now(),
 	}
 
 	go opr.processOggStream()
@@ -150,6 +151,11 @@ func (o *OpusPacketReader) processOggStream() {
 
 			for _, packet := range page.Packets {
 				o.packetChan <- packet
+				sleepTime := 20*time.Millisecond - time.Since(o.lastRead)
+				if sleepTime > 0 {
+					time.Sleep(sleepTime)
+				}
+				o.lastRead = time.Now()
 			}
 		}
 	}
@@ -162,15 +168,6 @@ func (o *OpusPacketReader) Read(p []byte) (int, error) {
 			return 0, io.EOF
 		}
 		n := copy(p, packet)
-
-		// Check the time elapsed since the last packet was read
-		elapsed := time.Since(o.lastRead)
-		if elapsed < 20*time.Millisecond {
-			// Sleep for the remaining time to make it consistent with the 20ms frame size
-			time.Sleep(20*time.Millisecond - elapsed)
-		}
-		o.lastRead = time.Now() // Update the lastRead timestamp
-
 		return n, nil
 	case err := <-o.errChan:
 		return 0, err

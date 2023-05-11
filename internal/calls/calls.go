@@ -135,7 +135,7 @@ func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 		playAudioChannel := make(chan []byte)
 
 		// Create responder
-		responder := responder.NewResponder(playAudioChannel, azureTTS, responderConfig, transcriptSSEChannel, &redisClient, joinParams.RedisTranscriptKey, discordClient.ID())
+		responder := responder.NewResponder(playAudioChannel, &conn, azureTTS, responderConfig, transcriptSSEChannel, &redisClient, joinParams.RedisTranscriptKey, discordClient.ID())
 
 		// Create call
 		newCall := &Call{
