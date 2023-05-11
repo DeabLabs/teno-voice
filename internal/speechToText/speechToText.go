@@ -3,6 +3,7 @@ package speechtotext
 import (
 	"context"
 	"log"
+	"strings"
 
 	Config "com.deablabs.teno-voice/internal/config"
 	"com.deablabs.teno-voice/internal/responder"
@@ -15,14 +16,17 @@ var dg = deepgram.NewClient(Config.Environment.DeepgramToken)
 
 // deepgram s2t sdk
 func NewStream(ctx context.Context, onClose func(), responder *responder.Responder, username string, userId string) (*websocket.Conn, error) {
+	// Split botname into words
+	botNameWords := strings.Split(responder.GetBotName(), " ")
+
 	ws, _, err := dg.LiveTranscription(deepgram.LiveTranscriptionOptions{
 		Punctuate:       true,
 		Encoding:        "opus",
 		Sample_rate:     48000,
 		Channels:        2,
 		Interim_results: true,
-		Search:          []string{responder.GetBotName()},
-		Keywords:        []string{responder.GetBotName()},
+		Search:          botNameWords,
+		Keywords:        botNameWords,
 		Model:           "phonecall",
 		Tier:            "nova",
 	})

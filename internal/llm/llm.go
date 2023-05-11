@@ -3,7 +3,6 @@ package llm
 import (
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
 	openai "com.deablabs.teno-voice/internal/llm/openai"
@@ -12,7 +11,7 @@ import (
 
 func GetTranscriptResponseStream(transcript string, service string, model string, botName string, personality string) (*goOpenai.ChatCompletionStream, error) {
 	prompt := formatPrompt(botName, transcript, personality)
-	log.Printf("Prompt: %s", prompt)
+	// log.Printf("Prompt: %s", prompt)
 
 	switch service {
 	case "openai":

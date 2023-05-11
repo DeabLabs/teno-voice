@@ -15,6 +15,9 @@ import (
 )
 
 func main() {
+	// log.SetLevel(log.LevelTrace)
+	// log.SetFlags(log.LstdFlags | log.Llongfile)
+
 	log.Info("starting up")
 
 	token := Config.Environment.DiscordToken
