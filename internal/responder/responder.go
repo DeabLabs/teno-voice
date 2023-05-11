@@ -36,6 +36,7 @@ const (
 
 type ResponderConfig struct {
 	BotName                    string
+	Personality                string
 	SleepMode                  SleepModeType
 	LinesBeforeSleep           int
 	BotNameConfidenceThreshold float64
@@ -264,7 +265,7 @@ func (r *Responder) Respond(receivedTranscriptionTime time.Time) context.CancelF
 
 func (r *Responder) getTokenStream(ctx context.Context, lines string) {
 	// Create the chat completion stream
-	stream, err := llm.GetTranscriptResponseStream(lines, r.responderConfig.LLMService, r.responderConfig.LLMModel, r.GetBotName())
+	stream, err := llm.GetTranscriptResponseStream(lines, r.responderConfig.LLMService, r.responderConfig.LLMModel, r.GetBotName(), r.responderConfig.Personality)
 	if err != nil {
 		fmt.Printf("Token stream error: %v\n", err)
 		return
@@ -388,6 +389,10 @@ func (r *Responder) GetTranscript() *transcript.Transcript {
 func (r *Responder) Configure(newConfig ResponderConfig) error {
 	if newConfig.BotName != "" {
 		r.responderConfig.BotName = newConfig.BotName
+	}
+
+	if newConfig.Personality != "" {
+		r.responderConfig.Personality = newConfig.Personality
 	}
 
 	if newConfig.SleepMode != 0 {
