@@ -341,11 +341,6 @@ func (r *Responder) getTokenStream(ctx context.Context, lines string) {
 			// Set the previous token to be the current token for the next iteration
 			previousToken = currentToken
 		}
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
 	}
 
 	// Emit any remaining sentence
