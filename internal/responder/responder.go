@@ -18,6 +18,7 @@ import (
 
 	// "com.deablabs.teno-voice/internal/llm"
 	"com.deablabs.teno-voice/internal/llm"
+	"com.deablabs.teno-voice/internal/responder/tools"
 	texttospeech "com.deablabs.teno-voice/internal/textToSpeech"
 	"com.deablabs.teno-voice/internal/transcript"
 	"github.com/disgoorg/disgo/voice"
@@ -46,6 +47,7 @@ type ResponderConfig struct {
 	TranscriptContextSize      int
 	IgnoreUser                 string
 	StopIgnoringUser           string
+	Tools                      []tools.Tool
 }
 
 type audioStreamWithIndex struct {
@@ -67,9 +69,10 @@ type Responder struct {
 	responderConfig        ResponderConfig
 	botId                  snowflake.ID
 	ignoredUsers           map[string]struct{}
+	toolMessagesSSEChannel chan string
 }
 
-func NewResponder(playAudioChannel chan []byte, conn *voice.Conn, ttsService texttospeech.TextToSpeechService, config ResponderConfig, transcriptSSEChannel chan string, redisClient *redis.Client, redisTranscriptKey string, botId snowflake.ID) *Responder {
+func NewResponder(playAudioChannel chan []byte, conn *voice.Conn, ttsService texttospeech.TextToSpeechService, config ResponderConfig, transcriptSSEChannel chan string, toolMessagesSSEChannel chan string, redisClient *redis.Client, redisTranscriptKey string, botId snowflake.ID) *Responder {
 	responder := &Responder{
 		playAudioChannel:       playAudioChannel,
 		conn:                   *conn,
@@ -83,6 +86,7 @@ func NewResponder(playAudioChannel chan []byte, conn *voice.Conn, ttsService tex
 		responderConfig:        config,
 		botId:                  botId,
 		ignoredUsers:           make(map[string]struct{}),
+		toolMessagesSSEChannel: toolMessagesSSEChannel,
 	}
 
 	return responder
@@ -270,7 +274,7 @@ func (r *Responder) Respond(receivedTranscriptionTime time.Time) context.CancelF
 
 func (r *Responder) getTokenStream(ctx context.Context, lines string) {
 	// Create the chat completion stream
-	stream, err := llm.GetTranscriptResponseStream(lines, r.responderConfig.LLMService, r.responderConfig.LLMModel, r.GetBotName(), r.responderConfig.Personality)
+	stream, err := llm.GetTranscriptResponseStream(lines, r.responderConfig.LLMService, r.responderConfig.LLMModel, r.GetBotName(), r.responderConfig.Personality, tools.ToolsToStringArray(r.responderConfig.Tools))
 	if err != nil {
 		fmt.Printf("Token stream error: %v\n", err)
 		return
@@ -280,11 +284,17 @@ func (r *Responder) getTokenStream(ctx context.Context, lines string) {
 	// Initialize a strings.Builder to build sentences from tokens
 	var sentenceBuilder strings.Builder
 
+	// Add this line to initialize a strings.Builder for tool messages
+	var toolMessageBuilder strings.Builder
+
 	// Initialize a variable to store the previous token
 	var previousToken string
 
 	// Initialize a flag to check if the stream has ended
 	streamEnded := false
+
+	// Initialize a flag to check if we're in the tool message section
+	var inToolMessages = false
 
 	// Iterate over tokens received from the stream
 	for !streamEnded {
@@ -307,8 +317,17 @@ func (r *Responder) getTokenStream(ctx context.Context, lines string) {
 				return
 			}
 
-			// If there is a previous token, append it to the sentenceBuilder
-			if previousToken != "" {
+			// If token is a "|", we've reached the tool message section
+			if currentToken == "|" {
+				inToolMessages = true
+				// Don't append this token to the sentence
+				continue
+			}
+
+			if inToolMessages {
+				// If we're in the tool message section, append the token to the toolMessageBuilder
+				toolMessageBuilder.WriteString(currentToken)
+			} else if previousToken != "" {
 				sentenceBuilder.WriteString(previousToken)
 
 				// If the previous token ends with a sentence-ending character and the current token starts with a whitespace, emit the sentence and reset the sentenceBuilder
@@ -332,6 +351,11 @@ func (r *Responder) getTokenStream(ctx context.Context, lines string) {
 	// Emit any remaining sentence
 	if sentenceBuilder.Len() > 0 {
 		r.sentenceChan <- sentenceBuilder.String()
+	}
+
+	// Emit any remaining tool messages
+	if toolMessageBuilder.Len() > 0 {
+		r.toolMessagesSSEChannel <- toolMessageBuilder.String()
 	}
 }
 
@@ -430,6 +454,10 @@ func (r *Responder) Configure(newConfig ResponderConfig) error {
 
 	if newConfig.StopIgnoringUser != "" {
 		delete(r.ignoredUsers, newConfig.StopIgnoringUser)
+	}
+
+	if newConfig.Tools != nil {
+		r.responderConfig.Tools = newConfig.Tools
 	}
 
 	return nil

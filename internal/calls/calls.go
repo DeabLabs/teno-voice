@@ -78,10 +78,11 @@ type LeaveRequest struct {
 }
 
 type Call struct {
-	connection        *voice.Conn
-	closeSignalChan   chan struct{}
-	transcriptSSEChan chan string
-	responder         *responder.Responder
+	connection          *voice.Conn
+	closeSignalChan     chan struct{}
+	transcriptSSEChan   chan string
+	toolMessagesSSEChan chan string
+	responder           *responder.Responder
 }
 
 var callsMutex sync.Mutex
@@ -124,6 +125,9 @@ func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 		// Make sse channel for live transcript updates
 		transcriptSSEChannel := make(chan string)
 
+		// Make sse channel for tool messages
+		toolMessagesSSEChannel := make(chan string)
+
 		// Create tts service
 		azureTTS := azure.NewAzureTTS()
 
@@ -135,14 +139,15 @@ func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 		playAudioChannel := make(chan []byte)
 
 		// Create responder
-		responder := responder.NewResponder(playAudioChannel, &conn, azureTTS, responderConfig, transcriptSSEChannel, &redisClient, joinParams.RedisTranscriptKey, discordClient.ID())
+		responder := responder.NewResponder(playAudioChannel, &conn, azureTTS, responderConfig, transcriptSSEChannel, toolMessagesSSEChannel, &redisClient, joinParams.RedisTranscriptKey, discordClient.ID())
 
 		// Create call
 		newCall := &Call{
-			connection:        &conn,
-			closeSignalChan:   closeSignal,
-			transcriptSSEChan: transcriptSSEChannel,
-			responder:         responder,
+			connection:          &conn,
+			closeSignalChan:     closeSignal,
+			transcriptSSEChan:   transcriptSSEChannel,
+			toolMessagesSSEChan: toolMessagesSSEChannel,
+			responder:           responder,
 		}
 
 		// Store the call in the map.
@@ -262,6 +267,56 @@ func TranscriptSSEHandler(dependencies *deps.Deps) http.HandlerFunc {
 				return
 			case transcriptLine := <-sseChannelForGuild:
 				fmt.Fprintf(w, "data: %s\n\n", transcriptLine)
+				flusher.Flush()
+			}
+		}
+	})
+}
+
+func ToolMessagesSSEHandler(dependencies *deps.Deps) http.HandlerFunc {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		guildIDStr := chi.URLParam(r, "guild_id")
+
+		guildID, err := snowflake.Parse(guildIDStr)
+		if err != nil {
+			http.Error(w, "Invalid guild ID", http.StatusBadRequest)
+			return
+		}
+
+		callsMutex.Lock()
+		call, ok := calls[guildID]
+		if !ok {
+			http.Error(w, "Not in voice call", http.StatusNotFound)
+			return
+		}
+		toolMessagesSSEChannel := call.toolMessagesSSEChan
+		callsMutex.Unlock()
+
+		if !ok {
+			http.Error(w, "No active SSE channels for this guild", http.StatusNotFound)
+			return
+		}
+
+		// Set the necessary headers for SSE
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+
+		// Use a flusher to send data immediately to the client
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "Streaming unsupported!", http.StatusInternalServerError)
+			return
+		}
+
+		// Listen for new tool messages and send them to the client
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case toolMessage := <-toolMessagesSSEChannel:
+				fmt.Fprintf(w, "data: %s\n\n", toolMessage)
 				flusher.Flush()
 			}
 		}
