@@ -313,14 +313,19 @@ func (r *Responder) getTokenStream(ctx context.Context, lines string) {
 			currentToken := response.Choices[0].Delta.Content
 
 			// If token is a "^", return
-			if currentToken == "^" {
+			if strings.Contains(currentToken, "^") {
 				return
 			}
 
 			// If token is a "|", we've reached the tool message section
-			if currentToken == "|" {
+			if strings.Contains(currentToken, "|") {
 				inToolMessages = true
 				// Don't append this token to the sentence
+
+				sentenceBuilder.WriteString(previousToken)
+				// Emit the remaining sentence
+				r.sentenceChan <- sentenceBuilder.String()
+				sentenceBuilder.Reset()
 				continue
 			}
 
@@ -348,9 +353,14 @@ func (r *Responder) getTokenStream(ctx context.Context, lines string) {
 		r.sentenceChan <- sentenceBuilder.String()
 	}
 
-	// Emit any remaining tool messages
+	// Validate and emit any remaining tool messages
 	if toolMessageBuilder.Len() > 0 {
-		r.toolMessagesSSEChannel <- toolMessageBuilder.String()
+		toolMessage := toolMessageBuilder.String()
+		if tools.IsValidToolMessage(toolMessage) {
+			r.toolMessagesSSEChannel <- toolMessage
+		} else {
+			fmt.Printf("Invalid tool message: %v\n", toolMessage)
+		}
 	}
 }
 

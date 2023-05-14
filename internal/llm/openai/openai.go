@@ -15,6 +15,8 @@ func CreateOpenAIStream(model string, prompt string, maxTokens int) (*openai.Cha
 	c := openai.NewClient(openAiToken)
 	ctx := context.Background()
 
+	// log.Printf("Prompt: " + prompt)
+
 	// Set up the request to OpenAI with the required parameters
 	req := openai.ChatCompletionRequest{
 		Model:     model,

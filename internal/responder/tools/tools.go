@@ -12,6 +12,58 @@ type Tool struct {
 	OutputGuide string `json:"outputGuide"`
 }
 
+type ToolMessage struct {
+	Name  string `json:"name"`
+	Input string `json:"input"`
+}
+
+func IsValidToolMessage(message string) bool {
+	var toolMessages []ToolMessage
+	err := json.Unmarshal([]byte(message), &toolMessages)
+
+	// If there's an error, the JSON was invalid.
+	if err != nil {
+		return false
+	}
+
+	// Iterate through the tool messages, checking that each has a non-empty "name" and "input".
+	for _, toolMessage := range toolMessages {
+		if toolMessage.Name == "" || toolMessage.Input == "" {
+			return false
+		}
+	}
+
+	// If no invalid tool messages were found, the JSON is valid.
+	return true
+}
+
+// func isValidToolMessage(message string, availableTools []Tool) bool {
+// 	var toolMessages []ToolMessage
+// 	err := json.Unmarshal([]byte(message), &toolMessages)
+
+// 	// If there's an error, the JSON was invalid.
+// 	if err != nil {
+// 		return false
+// 	}
+
+// 	// Convert the list of available tools into a set for faster lookup.
+// 	availableToolNames := make(map[string]bool)
+// 	for _, tool := range availableTools {
+// 		availableToolNames[tool.Name] = true
+// 	}
+
+// 	// Iterate through the tool messages, checking that each has a non-empty "name" and "input",
+//     // and that the "name" corresponds to an available tool.
+// 	for _, toolMessage := range toolMessages {
+// 		if toolMessage.Name == "" || toolMessage.Input == "" || !availableToolNames[toolMessage.Name] {
+// 			return false
+// 		}
+// 	}
+
+// 	// If no invalid tool messages were found, the JSON is valid.
+// 	return true
+// }
+
 // ParseTools parses a JSON string into an array of Tools
 func ParseTools(jsonTools string) ([]Tool, error) {
 	var tools []Tool
