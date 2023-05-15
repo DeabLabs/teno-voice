@@ -50,6 +50,7 @@ func main() {
 	router.Post("/leave", calls.LeaveVoiceCall(dependencies))
 	router.Post("/{guild_id}/config", calls.ConfigResponder(dependencies))
 	router.Get("/{guild_id}/transcript", calls.TranscriptSSEHandler(dependencies))
+	router.Post("/{guild_id}/tool-messages", calls.PushToCache(dependencies))
 	router.Get("/{guild_id}/tool-messages", calls.ToolMessagesSSEHandler(dependencies))
 
 	// Start the REST API server

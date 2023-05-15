@@ -20,6 +20,7 @@ import (
 
 	// "com.deablabs.teno-voice/internal/llm"
 	"com.deablabs.teno-voice/internal/llm"
+	"com.deablabs.teno-voice/internal/responder/cache"
 	"com.deablabs.teno-voice/internal/responder/tools"
 	texttospeech "com.deablabs.teno-voice/internal/textToSpeech"
 	"com.deablabs.teno-voice/internal/transcript"
@@ -70,6 +71,7 @@ type Responder struct {
 	botId                  snowflake.ID
 	ignoredUsers           map[string]struct{}
 	toolMessagesSSEChannel chan string
+	cache                  *cache.Cache
 }
 
 func NewResponder(playAudioChannel chan []byte, conn *voice.Conn, ttsService texttospeech.TextToSpeechService, config ResponderConfig, transcriptSSEChannel chan string, toolMessagesSSEChannel chan string, redisClient *redis.Client, redisTranscriptKey string, botId snowflake.ID) *Responder {
@@ -85,6 +87,7 @@ func NewResponder(playAudioChannel chan []byte, conn *voice.Conn, ttsService tex
 		botId:                  botId,
 		ignoredUsers:           make(map[string]struct{}),
 		toolMessagesSSEChannel: toolMessagesSSEChannel,
+		cache:                  cache.NewCache(),
 	}
 
 	return responder
@@ -92,6 +95,10 @@ func NewResponder(playAudioChannel chan []byte, conn *voice.Conn, ttsService tex
 
 func (r *Responder) GetBotName() string {
 	return r.responderConfig.BotName
+}
+
+func (r *Responder) GetCache() *cache.Cache {
+	return r.cache
 }
 
 func (r *Responder) SetSpeakingMode(mode SpeakingModeType) {
@@ -309,7 +316,7 @@ func (r *Responder) Respond(receivedTranscriptionTime time.Time) context.CancelF
 
 func (r *Responder) getTokenStream(ctx context.Context, lines string, sentenceChan chan string, toolMessageChan chan string) {
 	// Create the chat completion stream
-	stream, err := llm.GetTranscriptResponseStream(lines, r.responderConfig.LLMService, r.responderConfig.LLMModel, r.GetBotName(), r.responderConfig.Personality, tools.ToolsToStringArray(r.responderConfig.Tools))
+	stream, err := llm.GetTranscriptResponseStream(lines, r.responderConfig.LLMService, r.responderConfig.LLMModel, r.GetBotName(), r.responderConfig.Personality, tools.ToolsToStringArray(r.responderConfig.Tools), r.cache.RenderForPrompt())
 	if err != nil {
 		fmt.Printf("Token stream error: %v\n", err)
 		return

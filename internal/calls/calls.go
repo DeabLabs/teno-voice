@@ -12,6 +12,7 @@ import (
 	"com.deablabs.teno-voice/internal/deps"
 	"com.deablabs.teno-voice/internal/discord"
 	"com.deablabs.teno-voice/internal/responder"
+	"com.deablabs.teno-voice/internal/responder/cache"
 	"com.deablabs.teno-voice/internal/textToSpeech/azure"
 	"com.deablabs.teno-voice/pkg/helpers"
 	"github.com/disgoorg/disgo/voice"
@@ -352,7 +353,6 @@ func ConfigResponder(dependencies *deps.Deps) http.HandlerFunc {
 			return
 		}
 
-		// Assuming your Responder type has a Configure method
 		err = call.responder.Configure(config)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -360,5 +360,38 @@ func ConfigResponder(dependencies *deps.Deps) http.HandlerFunc {
 		}
 
 		w.WriteHeader(http.StatusOK)
+	}
+}
+
+func PushToCache(dependencies *deps.Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		guildIDStr := chi.URLParam(r, "guild_id")
+
+		guildID, err := snowflake.Parse(guildIDStr)
+		if err != nil {
+			http.Error(w, "Invalid guild ID", http.StatusBadRequest)
+			return
+		}
+
+		// Get the call for the given guildID
+		call, ok := calls[guildID]
+		if !ok {
+			http.Error(w, "Call not found", http.StatusNotFound)
+			return
+		}
+
+		var cacheItem cache.CacheItem
+		err = helpers.DecodeJSONBody(w, r, &cacheItem)
+		if err != nil {
+			var mr *helpers.MalformedRequest
+			if errors.As(err, &mr) {
+				http.Error(w, mr.Msg, mr.Status)
+			} else {
+				http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
+			}
+			return
+		}
+
+		call.responder.GetCache().AddItem(cacheItem)
 	}
 }
