@@ -8,9 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -60,8 +62,6 @@ type Responder struct {
 	transcript             *transcript.Transcript
 	playAudioChannel       chan []byte
 	conn                   voice.Conn
-	audioStreamChan        chan audioStreamWithIndex
-	sentenceChan           chan string
 	ttsService             texttospeech.TextToSpeechService
 	cancelResponse         context.CancelFunc
 	awake                  bool
@@ -76,8 +76,6 @@ func NewResponder(playAudioChannel chan []byte, conn *voice.Conn, ttsService tex
 	responder := &Responder{
 		playAudioChannel:       playAudioChannel,
 		conn:                   *conn,
-		sentenceChan:           make(chan string),
-		audioStreamChan:        make(chan audioStreamWithIndex, 100),
 		transcript:             transcript.NewTranscript(transcriptSSEChannel, redisClient, redisTranscriptKey),
 		ttsService:             ttsService,
 		cancelResponse:         nil,
@@ -100,11 +98,11 @@ func (r *Responder) SetSpeakingMode(mode SpeakingModeType) {
 	r.responderConfig.SpeakingMode = mode
 }
 
-func (r *Responder) synthesizeSentences(ctx context.Context) {
-	defer close(r.audioStreamChan) // Make sure to close the audioStreamChan when sentenceChan is closed
+func (r *Responder) synthesizeSentences(ctx context.Context, sentenceChan chan string, audioStreamChan chan audioStreamWithIndex) {
+	defer close(audioStreamChan) // Make sure to close the audioStreamChan when sentenceChan is closed
 
 	sentenceIndex := 0
-	for sentence := range r.sentenceChan {
+	for sentence := range sentenceChan {
 		select {
 		case <-ctx.Done():
 			return
@@ -115,7 +113,7 @@ func (r *Responder) synthesizeSentences(ctx context.Context) {
 			fmt.Printf("Error generating speech: %v\n", err)
 			continue
 		}
-		r.audioStreamChan <- audioStreamWithIndex{
+		audioStreamChan <- audioStreamWithIndex{
 			index:       sentenceIndex,
 			opusPackets: opusPackets,
 			sentence:    sentence,
@@ -124,14 +122,14 @@ func (r *Responder) synthesizeSentences(ctx context.Context) {
 	}
 }
 
-func (r *Responder) playSynthesizedSentences(ctx context.Context, receivedTranscriptionTime time.Time) {
+func (r *Responder) playSynthesizedSentences(ctx context.Context, receivedTranscriptionTime time.Time, audioStreamChan chan audioStreamWithIndex) {
 	audioStreamMap := make(map[int]io.ReadCloser)
 	nextAudioIndex := 0
 	bytesToDiscard := 1700 // Adjust this value based on how much you want to trim from the beginning
 
 	firstSentence := true
 
-	for audioStreamWithIndex := range r.audioStreamChan {
+	for audioStreamWithIndex := range audioStreamChan {
 		audioStreamMap[audioStreamWithIndex.index] = audioStreamWithIndex.opusPackets
 		sentence := audioStreamWithIndex.sentence
 
@@ -254,25 +252,62 @@ func (r *Responder) botLineSpoken(line string) {
 
 func (r *Responder) Respond(receivedTranscriptionTime time.Time) context.CancelFunc {
 	ctx, cancelFunc := context.WithCancel(context.Background())
-	r.sentenceChan = make(chan string)
-	r.audioStreamChan = make(chan audioStreamWithIndex)
+	sentenceChan := make(chan string)
+	audioStreamChan := make(chan audioStreamWithIndex, 100)
+
+	// Create channel for tool messages ready to be sent
+	toolMessageChan := make(chan string, 1)
 
 	// Get recent lines of the transcript
 	lines := r.transcript.GetRecentLines(r.responderConfig.TranscriptContextSize)
 
+	wg := sync.WaitGroup{}
+
 	// Start the goroutine to get a stream of tokens
-	go r.getTokenStream(ctx, lines)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		r.getTokenStream(ctx, lines, sentenceChan, toolMessageChan)
+	}()
 
 	// Start the goroutine to synthesize the sentences into audio
-	go r.synthesizeSentences(ctx)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		r.synthesizeSentences(ctx, sentenceChan, audioStreamChan)
+	}()
 
 	// Start the goroutine to play the synthesized sentences
-	go r.playSynthesizedSentences(ctx, receivedTranscriptionTime)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		r.playSynthesizedSentences(ctx, receivedTranscriptionTime, audioStreamChan)
+	}()
+
+	// Start a goroutine to wait for all other goroutines to finish
+	go func() {
+		wg.Wait()
+
+		// Check if the context was cancelled
+		select {
+		case <-ctx.Done():
+			// If the context was cancelled, don't send the tool message
+			return
+		default:
+			// If the context wasn't cancelled, send the tool message
+			for toolMessage := range toolMessageChan {
+				r.toolMessagesSSEChannel <- toolMessage
+			}
+		}
+
+		// After all other goroutines have finished, close the toolMessageChan
+		close(toolMessageChan)
+	}()
 
 	return cancelFunc
 }
 
-func (r *Responder) getTokenStream(ctx context.Context, lines string) {
+func (r *Responder) getTokenStream(ctx context.Context, lines string, sentenceChan chan string, toolMessageChan chan string) {
 	// Create the chat completion stream
 	stream, err := llm.GetTranscriptResponseStream(lines, r.responderConfig.LLMService, r.responderConfig.LLMModel, r.GetBotName(), r.responderConfig.Personality, tools.ToolsToStringArray(r.responderConfig.Tools))
 	if err != nil {
@@ -280,6 +315,7 @@ func (r *Responder) getTokenStream(ctx context.Context, lines string) {
 		return
 	}
 	defer stream.Close()
+	defer close(sentenceChan)
 
 	// Initialize a strings.Builder to build sentences from tokens
 	var sentenceBuilder strings.Builder
@@ -324,7 +360,7 @@ func (r *Responder) getTokenStream(ctx context.Context, lines string) {
 
 				sentenceBuilder.WriteString(previousToken)
 				// Emit the remaining sentence
-				r.sentenceChan <- sentenceBuilder.String()
+				sentenceChan <- sentenceBuilder.String()
 				sentenceBuilder.Reset()
 				continue
 			}
@@ -338,7 +374,7 @@ func (r *Responder) getTokenStream(ctx context.Context, lines string) {
 				// If the previous token ends with a sentence-ending character and the current token starts with a whitespace, emit the sentence and reset the sentenceBuilder
 				if isEndOfSentence(previousToken) && startsWithWhitespace(currentToken) {
 					sentence := sentenceBuilder.String()
-					r.sentenceChan <- sentence
+					sentenceChan <- sentence
 					sentenceBuilder.Reset()
 				}
 			}
@@ -350,14 +386,15 @@ func (r *Responder) getTokenStream(ctx context.Context, lines string) {
 
 	// Emit any remaining sentence
 	if sentenceBuilder.Len() > 0 {
-		r.sentenceChan <- sentenceBuilder.String()
+		sentenceChan <- sentenceBuilder.String()
 	}
 
 	// Validate and emit any remaining tool messages
 	if toolMessageBuilder.Len() > 0 {
 		toolMessage := toolMessageBuilder.String()
+		log.Printf("Tool message: %v\n", toolMessage)
 		if tools.IsValidToolMessage(toolMessage) {
-			r.toolMessagesSSEChannel <- toolMessage
+			toolMessageChan <- toolMessage
 		} else {
 			fmt.Printf("Invalid tool message: %v\n", toolMessage)
 		}
