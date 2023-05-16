@@ -72,6 +72,7 @@ type Responder struct {
 	ignoredUsers           map[string]struct{}
 	toolMessagesSSEChannel chan string
 	cache                  *cache.Cache
+	isSpeaking             bool
 }
 
 func NewResponder(playAudioChannel chan []byte, conn *voice.Conn, ttsService texttospeech.TextToSpeechService, config ResponderConfig, transcriptSSEChannel chan string, toolMessagesSSEChannel chan string, redisClient *redis.Client, redisTranscriptKey string, botId snowflake.ID) *Responder {
@@ -88,173 +89,58 @@ func NewResponder(playAudioChannel chan []byte, conn *voice.Conn, ttsService tex
 		ignoredUsers:           make(map[string]struct{}),
 		toolMessagesSSEChannel: toolMessagesSSEChannel,
 		cache:                  cache.NewCache(),
+		isSpeaking:             false,
 	}
 
 	return responder
 }
 
-func (r *Responder) GetBotName() string {
-	return r.responderConfig.BotName
-}
-
-func (r *Responder) GetCache() *cache.Cache {
-	return r.cache
-}
-
-func (r *Responder) SetSpeakingMode(mode SpeakingModeType) {
-	r.responderConfig.SpeakingMode = mode
-}
-
-func (r *Responder) synthesizeSentences(ctx context.Context, sentenceChan chan string, audioStreamChan chan audioStreamWithIndex) {
-	defer close(audioStreamChan) // Make sure to close the audioStreamChan when sentenceChan is closed
-
-	sentenceIndex := 0
-	for sentence := range sentenceChan {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-		opusPackets, err := r.ttsService.Synthesize(sentence)
-		if err != nil {
-			fmt.Printf("Error generating speech: %v\n", err)
-			continue
-		}
-		audioStreamChan <- audioStreamWithIndex{
-			index:       sentenceIndex,
-			opusPackets: opusPackets,
-			sentence:    sentence,
-		}
-		sentenceIndex++
-	}
-}
-
-func (r *Responder) playSynthesizedSentences(ctx context.Context, receivedTranscriptionTime time.Time, audioStreamChan chan audioStreamWithIndex) {
-	audioStreamMap := make(map[int]io.ReadCloser)
-	nextAudioIndex := 0
-	bytesToDiscard := 1700 // Adjust this value based on how much you want to trim from the beginning
-
-	firstSentence := true
-
-	for audioStreamWithIndex := range audioStreamChan {
-		audioStreamMap[audioStreamWithIndex.index] = audioStreamWithIndex.opusPackets
-		sentence := audioStreamWithIndex.sentence
-
-		r.setSpeaking(true)
-
-		if firstSentence {
-			transcriptionToResponseLatency := time.Since(receivedTranscriptionTime)
-			// Print latency in milliseconds
-			fmt.Printf("Transcription to response latency: %.0f ms\n", transcriptionToResponseLatency.Seconds()*1000)
-			firstSentence = false
-		}
-
-		for {
-			opusPackets, ok := audioStreamMap[nextAudioIndex]
-			if !ok {
-				break
-			}
-
-			// Discard bytes from the beginning of the audio stream
-			if err := r.discardBytes(opusPackets, bytesToDiscard); err != nil {
-				break
-			}
-
-			// Use a buffer to read the packets and send them to the playAudioChannel
-			buf := make([]byte, 8192)
-			for {
-				select {
-				case <-ctx.Done():
-					r.sendSilentFrames(5)
-					r.setSpeaking(false)
-					return
-				default:
-				}
-
-				n, err := opusPackets.Read(buf)
-				if err != nil {
-					if err != io.EOF {
-						fmt.Printf("Error reading Opus packet: %s\n", err)
-					}
-					break
-				}
-
-				// Send the payload to the playAudioChannel
-				r.playAudioChannel <- buf[:n]
-			}
-			opusPackets.Close() // Close the opusPackets after playing
-
-			r.botLineSpoken(sentence)
-
-			// Remove the played audio stream from the map and increment the nextAudioIndex
-			delete(audioStreamMap, nextAudioIndex)
-			nextAudioIndex++
-		}
-		r.sendSilentFrames(1)
-		r.setSpeaking(false)
-	}
-}
-
-func (r *Responder) InterimTranscriptionReceived() {
-	if r.cancelResponse != nil {
-		r.cancelResponse()
-	}
-}
-
-func (r *Responder) NewTranscription(line string, botNameSpoken float64, username string, userId string) {
-	receivedTranscriptionTime := time.Now()
-
-	newLine := &transcript.Line{
-		Text:     line,
-		Username: username,
-		UserId:   userId,
-		Time:     time.Now(),
+func (r *Responder) Configure(newConfig ResponderConfig) error {
+	if newConfig.BotName != "" {
+		r.responderConfig.BotName = newConfig.BotName
 	}
 
-	r.transcript.AddLine(newLine)
-	r.linesSinceLastResponse++
-
-	if r.cancelResponse != nil {
-		r.cancelResponse()
+	if newConfig.Personality != "" {
+		r.responderConfig.Personality = newConfig.Personality
 	}
 
-	switch r.responderConfig.SpeakingMode {
-	case NeverSpeak:
-		return
-	case AlwaysSleep:
-		r.awake = false
-	case AutoSleep:
-		if r.linesSinceLastResponse > r.responderConfig.LinesBeforeSleep {
-			r.awake = false
-			// log.Printf("Bot is asleep\n")
-		}
-
-		if botNameSpoken > r.responderConfig.BotNameConfidenceThreshold {
-			r.awake = true
-			r.linesSinceLastResponse = 0
-			// log.Printf("Bot is awake\n")
-		}
-	default: // AlwaysSpeak
-		r.awake = true
+	if newConfig.SpeakingMode != 0 {
+		r.responderConfig.SpeakingMode = newConfig.SpeakingMode
 	}
 
-	// Only respond if the bot is awake
-	if r.awake {
-		r.cancelResponse = r.Respond(receivedTranscriptionTime)
+	if newConfig.LinesBeforeSleep != 0 {
+		r.responderConfig.LinesBeforeSleep = newConfig.LinesBeforeSleep
 	}
-}
 
-func (r *Responder) botLineSpoken(line string) {
-	newLine := &transcript.Line{
-		Text:     line,
-		Username: r.responderConfig.BotName,
-		UserId:   r.botId.String(),
-		Time:     time.Now(),
+	if newConfig.BotNameConfidenceThreshold != 0 {
+		r.responderConfig.BotNameConfidenceThreshold = newConfig.BotNameConfidenceThreshold
 	}
-	r.transcript.AddLine(newLine)
 
-	// Reset the counter when the bot speaks
-	r.linesSinceLastResponse = 0
+	if newConfig.LLMService != "" {
+		r.responderConfig.LLMService = newConfig.LLMService
+	}
+
+	if newConfig.LLMModel != "" {
+		r.responderConfig.LLMModel = newConfig.LLMModel
+	}
+
+	if newConfig.TranscriptContextSize != 0 {
+		r.responderConfig.TranscriptContextSize = newConfig.TranscriptContextSize
+	}
+
+	if newConfig.IgnoreUser != "" {
+		r.ignoredUsers[newConfig.IgnoreUser] = struct{}{}
+	}
+
+	if newConfig.StopIgnoringUser != "" {
+		delete(r.ignoredUsers, newConfig.StopIgnoringUser)
+	}
+
+	if newConfig.Tools != nil {
+		r.responderConfig.Tools = newConfig.Tools
+	}
+
+	return nil
 }
 
 func (r *Responder) Respond(receivedTranscriptionTime time.Time) context.CancelFunc {
@@ -402,9 +288,170 @@ func (r *Responder) getTokenStream(ctx context.Context, lines string, sentenceCh
 		log.Printf("Tool message: %v\n", toolMessage)
 		if tools.IsValidToolMessage(toolMessage) {
 			toolMessageChan <- toolMessage
+			r.transcript.AddToolMessageLine(toolMessage)
 		} else {
 			fmt.Printf("Invalid tool message: %v\n", toolMessage)
 		}
+	}
+}
+
+func (r *Responder) synthesizeSentences(ctx context.Context, sentenceChan chan string, audioStreamChan chan audioStreamWithIndex) {
+	defer close(audioStreamChan) // Make sure to close the audioStreamChan when sentenceChan is closed
+
+	sentenceIndex := 0
+	for sentence := range sentenceChan {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		opusPackets, err := r.ttsService.Synthesize(sentence)
+		if err != nil {
+			fmt.Printf("Error generating speech: %v\n", err)
+			continue
+		}
+		audioStreamChan <- audioStreamWithIndex{
+			index:       sentenceIndex,
+			opusPackets: opusPackets,
+			sentence:    sentence,
+		}
+		sentenceIndex++
+	}
+}
+
+func (r *Responder) playSynthesizedSentences(ctx context.Context, receivedTranscriptionTime time.Time, audioStreamChan chan audioStreamWithIndex) {
+	audioStreamMap := make(map[int]io.ReadCloser)
+	nextAudioIndex := 0
+	bytesToDiscard := 1700 // Adjust this value based on how much you want to trim from the beginning
+
+	firstSentence := true
+
+	for audioStreamWithIndex := range audioStreamChan {
+		audioStreamMap[audioStreamWithIndex.index] = audioStreamWithIndex.opusPackets
+		sentence := audioStreamWithIndex.sentence
+
+		r.setSpeaking(true)
+
+		if firstSentence {
+			r.isSpeaking = true
+			transcriptionToResponseLatency := time.Since(receivedTranscriptionTime)
+			// Print latency in milliseconds
+			fmt.Printf("Transcription to response latency: %.0f ms\n", transcriptionToResponseLatency.Seconds()*1000)
+
+			firstSentence = false
+		}
+
+		for {
+			opusPackets, ok := audioStreamMap[nextAudioIndex]
+			if !ok {
+				break
+			}
+
+			// Discard bytes from the beginning of the audio stream
+			if err := r.discardBytes(opusPackets, bytesToDiscard); err != nil {
+				break
+			}
+
+			// Use a buffer to read the packets and send them to the playAudioChannel
+			buf := make([]byte, 8192)
+			for {
+				select {
+				case <-ctx.Done():
+					r.isSpeaking = false
+					r.sendSilentFrames(5)
+					r.setSpeaking(false)
+					opusPackets.Close()
+					return
+				default:
+				}
+
+				n, err := opusPackets.Read(buf)
+				if err != nil {
+					if err != io.EOF {
+						fmt.Printf("Error reading Opus packet: %s\n", err)
+					}
+					break
+				}
+
+				// Send the payload to the playAudioChannel
+				r.playAudioChannel <- buf[:n]
+			}
+			opusPackets.Close() // Close the opusPackets after playing
+
+			r.botLineSpoken(sentence)
+
+			// Remove the played audio stream from the map and increment the nextAudioIndex
+			delete(audioStreamMap, nextAudioIndex)
+			nextAudioIndex++
+		}
+		r.sendSilentFrames(1)
+		r.setSpeaking(false)
+	}
+	r.isSpeaking = false
+}
+
+func (r *Responder) NewTranscription(line string, botNameSpoken float64, username string, userId string) {
+	receivedTranscriptionTime := time.Now()
+
+	newLine := &transcript.Line{
+		Text:     line,
+		Username: username,
+		UserId:   userId,
+		Time:     time.Now(),
+	}
+
+	r.transcript.AddLine(newLine)
+	r.linesSinceLastResponse++
+
+	if r.cancelResponse != nil {
+		r.cancelResponse()
+	}
+
+	switch r.responderConfig.SpeakingMode {
+	case NeverSpeak:
+		return
+	case AlwaysSleep:
+		r.awake = false
+	case AutoSleep:
+		if r.linesSinceLastResponse > r.responderConfig.LinesBeforeSleep {
+			r.awake = false
+			// log.Printf("Bot is asleep\n")
+		}
+
+		if botNameSpoken > r.responderConfig.BotNameConfidenceThreshold {
+			r.awake = true
+			r.linesSinceLastResponse = 0
+			// log.Printf("Bot is awake\n")
+		}
+	default: // AlwaysSpeak
+		r.awake = true
+	}
+
+	// Only respond if the bot is awake
+	if r.awake {
+		if r.isSpeaking {
+			r.transcript.AddInterruptionLine(username, r.GetBotName())
+		}
+		r.cancelResponse = r.Respond(receivedTranscriptionTime)
+	}
+}
+
+func (r *Responder) botLineSpoken(line string) {
+	newLine := &transcript.Line{
+		Text:     line,
+		Username: r.responderConfig.BotName,
+		UserId:   r.botId.String(),
+		Time:     time.Now(),
+	}
+	r.transcript.AddLine(newLine)
+
+	// Reset the counter when the bot speaks
+	r.linesSinceLastResponse = 0
+}
+
+func (r *Responder) InterimTranscriptionReceived() {
+	if r.cancelResponse != nil {
+		r.cancelResponse()
 	}
 }
 
@@ -460,58 +507,6 @@ func (r *Responder) discardBytes(reader io.Reader, bytesToDiscard int) error {
 	return nil
 }
 
-func (r *Responder) GetTranscript() *transcript.Transcript {
-	return r.transcript
-}
-
-func (r *Responder) Configure(newConfig ResponderConfig) error {
-	if newConfig.BotName != "" {
-		r.responderConfig.BotName = newConfig.BotName
-	}
-
-	if newConfig.Personality != "" {
-		r.responderConfig.Personality = newConfig.Personality
-	}
-
-	if newConfig.SpeakingMode != 0 {
-		r.responderConfig.SpeakingMode = newConfig.SpeakingMode
-	}
-
-	if newConfig.LinesBeforeSleep != 0 {
-		r.responderConfig.LinesBeforeSleep = newConfig.LinesBeforeSleep
-	}
-
-	if newConfig.BotNameConfidenceThreshold != 0 {
-		r.responderConfig.BotNameConfidenceThreshold = newConfig.BotNameConfidenceThreshold
-	}
-
-	if newConfig.LLMService != "" {
-		r.responderConfig.LLMService = newConfig.LLMService
-	}
-
-	if newConfig.LLMModel != "" {
-		r.responderConfig.LLMModel = newConfig.LLMModel
-	}
-
-	if newConfig.TranscriptContextSize != 0 {
-		r.responderConfig.TranscriptContextSize = newConfig.TranscriptContextSize
-	}
-
-	if newConfig.IgnoreUser != "" {
-		r.ignoredUsers[newConfig.IgnoreUser] = struct{}{}
-	}
-
-	if newConfig.StopIgnoringUser != "" {
-		delete(r.ignoredUsers, newConfig.StopIgnoringUser)
-	}
-
-	if newConfig.Tools != nil {
-		r.responderConfig.Tools = newConfig.Tools
-	}
-
-	return nil
-}
-
 func (r *Responder) setSpeaking(speaking bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -540,8 +535,24 @@ func (r *Responder) sendSilentFrames(frames int) {
 	}
 }
 
+func (r *Responder) SetSpeakingMode(mode SpeakingModeType) {
+	r.responderConfig.SpeakingMode = mode
+}
+
 // IsIgnored checks if a user is ignored
 func (r *Responder) IsIgnored(userId string) bool {
 	_, ok := r.ignoredUsers[userId]
 	return ok
+}
+
+func (r *Responder) GetBotName() string {
+	return r.responderConfig.BotName
+}
+
+func (r *Responder) GetCache() *cache.Cache {
+	return r.cache
+}
+
+func (r *Responder) GetTranscript() *transcript.Transcript {
+	return r.transcript
 }

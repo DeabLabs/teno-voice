@@ -3,6 +3,7 @@ package llm
 import (
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -22,6 +23,8 @@ func GetTranscriptResponseStream(transcript string, service string, model string
 	pb.AddTranscript()
 
 	prompt := pb.Build()
+
+	log.Printf("Prompt: %s", prompt)
 
 	switch service {
 	case "openai":
@@ -60,14 +63,14 @@ func (pb *PromptBuilder) AddIntroduction() *PromptBuilder {
 
 // AddTranscript adds the transcript section to the prompt
 func (pb *PromptBuilder) AddTranscript() *PromptBuilder {
-	transcript := fmt.Sprintf("Below is the transcript of a voice call, up to the current moment. It may include transcription errors, if you think a transcription was incorrect, infer the true words from context. The first sentence of your response should be as short as possible within reason. If the last person to speak doesn't expect or want a response from you, or they are explicitly asking you to stop speaking, your response should only be the single character '^' with no spaces.\n\n%s\n[%s] %s:", pb.transcript, time.Now().Format("15:04:05"), pb.botName)
+	transcript := fmt.Sprintf("Below is the transcript of a voice call, up to the current moment. It may include transcription errors (especially at the beginnings of lines), if you think a transcription was incorrect, infer the true words from context. The first sentence of your response should be as short as possible within reason. The transcript may also include information like your previous tool uses, and mark when others interrupted you to stop your words from playing (which may mean they want you to stop talking). If the last person to speak doesn't expect or want a response from you, or they are explicitly asking you to stop speaking, your response should only be the single character '^' with no spaces.\n\n%s\n[%s] %s:", pb.transcript, time.Now().Format("15:04:05"), pb.botName)
 	pb.sections = append(pb.sections, transcript)
 	return pb
 }
 
 // AddTools adds the tool primer and tool list sections to the prompt
 func (pb *PromptBuilder) AddTools() *PromptBuilder {
-	toolPrimer := "Below is a list of available tools you can use. Each tool has four attributes: `Name`: the tool's identifier, `Description`: explains the tool's purpose and when to use it, `Input Guide`: advises on how to format the input string, `Output Guide`: describes the tool's return value, if any. To use a tool, compose a response with two parts: a spoken response and tool usage instructions, separated by '|'. The spoken response is a string of text to be read aloud via TTS. The tool usage instructions are a JSON array. Each array element is a JSON object representing a tool to be used, with two properties: `name` and `input`. For example: Spoken response|[{ \"name\": \"Tool1\", \"input\": \"value1\" }, { \"name\": \"Tool2\", \"input\": \"value2\" }]. Remember, avoid using '|' in the spoken response or tool inputs. Review the `description`, `input guide`, and `output guide` of each tool carefully to use them effectively."
+	toolPrimer := fmt.Sprintf("Below is a list of available tools you can use. Each tool has four attributes: `Name`: the tool's identifier, `Description`: explains the tool's purpose and when to use it, `Input Guide`: advises on how to format the input string, `Output Guide`: describes the tool's return value, if any. To use a tool, compose a response with two parts: a spoken response and tool usage instructions, separated by a newline and a pipe ('|'). The spoken response is a string of text to be read aloud via TTS. The tool usage instructions are on the next line, starting with a '|', in the form of a JSON array. Each array element is a JSON object representing a tool to be used, with two properties: `name` and `input`. You shouldn't explain to the other voice call members how you use the tools unless someone asks. Here's an example of a response that uses a tool:\n\n[01:48:40] %s: This text before the pipe will be played in the voice channel like normal.\n|[{ \"name\": \"Tool1\", \"input\": \"This input will be sent to tool 1\" }, { \"name\": \"Tool2\", \"input\": \"This input will be sent to tool 2\" }].\n\nRemember to enter a new line and write a '|' before writing your tool message. Review the `description`, `input guide`, and `output guide` of each tool carefully to use them effectively.", pb.botName)
 
 	// If there are no tools, say that instead
 	toolList := ""

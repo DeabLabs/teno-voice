@@ -55,6 +55,16 @@ func (t *Transcript) AddLine(line *Line) error {
 	return nil
 }
 
+func (t *Transcript) AddInterruptionLine(username string, botName string) {
+	line := fmt.Sprintf("[%s interrupted %s]", username, botName)
+	t.lines = append(t.lines, line)
+}
+
+func (t *Transcript) AddToolMessageLine(toolMessage string) {
+	toolMessageLine := fmt.Sprintf("|%s", toolMessage)
+	t.lines = append(t.lines, toolMessageLine)
+}
+
 func (t *Transcript) GetTranscript() []string {
 	return t.lines
 }
