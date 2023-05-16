@@ -286,7 +286,7 @@ func (r *Responder) getTokenStream(ctx context.Context, lines string, sentenceCh
 	if toolMessageBuilder.Len() > 0 {
 		toolMessage := toolMessageBuilder.String()
 		log.Printf("Tool message: %v\n", toolMessage)
-		if tools.IsValidToolMessage(toolMessage) {
+		if tools.IsValidToolMessage(toolMessage, r.responderConfig.Tools) {
 			toolMessageChan <- toolMessage
 			r.transcript.AddToolMessageLine(toolMessage)
 		} else {
