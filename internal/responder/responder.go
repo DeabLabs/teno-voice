@@ -24,6 +24,7 @@ import (
 	"com.deablabs.teno-voice/internal/responder/tools"
 	texttospeech "com.deablabs.teno-voice/internal/textToSpeech"
 	"com.deablabs.teno-voice/internal/transcript"
+	"com.deablabs.teno-voice/internal/usage"
 	"github.com/disgoorg/disgo/voice"
 	"github.com/disgoorg/snowflake/v2"
 	"github.com/redis/go-redis/v9"
@@ -202,13 +203,15 @@ func (r *Responder) Respond(receivedTranscriptionTime time.Time) context.CancelF
 
 func (r *Responder) getTokenStream(ctx context.Context, lines string, sentenceChan chan string, toolMessageChan chan string) {
 	// Create the chat completion stream
-	stream, err := llm.GetTranscriptResponseStream(lines, r.responderConfig.LLMService, r.responderConfig.LLMModel, r.GetBotName(), r.responderConfig.Personality, tools.ToolsToStringArray(r.responderConfig.Tools), r.cache.RenderForPrompt())
+	stream, usageEvent, err := llm.GetTranscriptResponseStream(lines, r.responderConfig.LLMService, r.responderConfig.LLMModel, r.GetBotName(), r.responderConfig.Personality, tools.ToolsToStringArray(r.responderConfig.Tools), r.cache.RenderForPrompt())
 	if err != nil {
 		fmt.Printf("Token stream error: %v\n", err)
 		return
 	}
 	defer stream.Close()
 	defer close(sentenceChan)
+
+	var totalTokens int
 
 	// Initialize a strings.Builder to build sentences from tokens
 	var sentenceBuilder strings.Builder
@@ -240,6 +243,8 @@ func (r *Responder) getTokenStream(ctx context.Context, lines string, sentenceCh
 		} else {
 			// Extract the token from the response
 			currentToken := response.Choices[0].Delta.Content
+
+			totalTokens++
 
 			// If token is a "^", return
 			if strings.Contains(currentToken, "^") {
@@ -293,6 +298,11 @@ func (r *Responder) getTokenStream(ctx context.Context, lines string, sentenceCh
 			fmt.Printf("Invalid tool message: %v\n", toolMessage)
 		}
 	}
+
+	usageEvent.SetCompletionTokens(totalTokens)
+	if !usageEvent.IsEmpty() {
+		usage.SendEventToDB(usageEvent)
+	}
 }
 
 func (r *Responder) synthesizeSentences(ctx context.Context, sentenceChan chan string, audioStreamChan chan audioStreamWithIndex) {
@@ -305,7 +315,7 @@ func (r *Responder) synthesizeSentences(ctx context.Context, sentenceChan chan s
 			return
 		default:
 		}
-		opusPackets, err := r.ttsService.Synthesize(sentence)
+		opusPackets, usageEvent, err := r.ttsService.Synthesize(sentence)
 		if err != nil {
 			fmt.Printf("Error generating speech: %v\n", err)
 			continue
@@ -316,6 +326,9 @@ func (r *Responder) synthesizeSentences(ctx context.Context, sentenceChan chan s
 			sentence:    sentence,
 		}
 		sentenceIndex++
+		if !usageEvent.IsEmpty() {
+			usage.SendEventToDB(usageEvent)
+		}
 	}
 }
 

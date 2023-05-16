@@ -1,7 +1,11 @@
 package texttospeech
 
-import "io"
+import (
+	"io"
+
+	"com.deablabs.teno-voice/internal/usage"
+)
 
 type TextToSpeechService interface {
-	Synthesize(text string) (io.ReadCloser, error)
+	Synthesize(text string) (io.ReadCloser, *usage.TextToSpeechEvent, error)
 }

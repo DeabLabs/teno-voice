@@ -7,6 +7,7 @@ import (
 
 	Config "com.deablabs.teno-voice/internal/config"
 	"com.deablabs.teno-voice/internal/responder"
+	"com.deablabs.teno-voice/internal/usage"
 	"com.deablabs.teno-voice/pkg/deepgram"
 	"github.com/Jeffail/gabs/v2"
 	"github.com/gorilla/websocket"
@@ -64,7 +65,7 @@ func NewStream(ctx context.Context, onClose func(), responder *responder.Respond
 
 				transcription, ok := jsonParsed.Path("channel.alternatives.0.transcript").Data().(string)
 
-				if ok && transcription != "" {
+				if ok {
 					if !jsonParsed.Path("is_final").Data().(bool) {
 						responder.InterimTranscriptionReceived()
 					} else {
@@ -80,7 +81,16 @@ func NewStream(ctx context.Context, onClose func(), responder *responder.Respond
 								}
 							}
 						}
-						responder.NewTranscription(transcription, botNameConfidence, username, userId)
+						if transcription != "" {
+							responder.NewTranscription(transcription, botNameConfidence, username, userId)
+						}
+
+						usageEvent := usage.NewTranscriptionEvent("deepgram", "nova-streaming", jsonParsed.Path("duration").Data().(float64)/60.0)
+
+						// Send event struct if its not empty
+						if !usageEvent.IsEmpty() {
+							usage.SendEventToDB(usageEvent)
+						}
 					}
 				}
 

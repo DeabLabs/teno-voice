@@ -56,6 +56,10 @@ func IsValidToolMessage(message string, availableTools []Tool) bool {
 		availableToolNames[tool.Name] = true
 	}
 
+	if len(toolMessages) == 0 {
+		return false
+	}
+
 	// Iterate through the tool messages, checking that each has a non-empty "name" and "input",
 	// and that the "name" corresponds to an available tool.
 	for _, toolMessage := range toolMessages {

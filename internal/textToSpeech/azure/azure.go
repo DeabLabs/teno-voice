@@ -9,6 +9,7 @@ import (
 	"time"
 
 	Config "com.deablabs.teno-voice/internal/config"
+	"com.deablabs.teno-voice/internal/usage"
 	"mccoy.space/g/ogg"
 )
 
@@ -63,10 +64,10 @@ func getAccessToken() (string, error) {
 	return string(token), nil
 }
 
-func (a *AzureTTS) Synthesize(text string) (io.ReadCloser, error) {
+func (a *AzureTTS) Synthesize(text string) (io.ReadCloser, *usage.TextToSpeechEvent, error) {
 	token, err := getAccessToken()
 	if err != nil {
-		return nil, err
+		return nil, &usage.TextToSpeechEvent{}, err
 	}
 
 	ssml := SSML{
@@ -82,13 +83,13 @@ func (a *AzureTTS) Synthesize(text string) (io.ReadCloser, error) {
 
 	ssmlBytes, err := xml.Marshal(ssml)
 	if err != nil {
-		return nil, err
+		return nil, &usage.TextToSpeechEvent{}, err
 	}
 
 	client := &http.Client{}
 	req, err := http.NewRequest("POST", ttsEndpoint, bytes.NewReader(ssmlBytes))
 	if err != nil {
-		return nil, err
+		return nil, &usage.TextToSpeechEvent{}, err
 	}
 
 	req.Header.Add("Authorization", "Bearer "+token)
@@ -98,16 +99,18 @@ func (a *AzureTTS) Synthesize(text string) (io.ReadCloser, error) {
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, &usage.TextToSpeechEvent{}, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		return nil, &usage.TextToSpeechEvent{}, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
 	opusReader := NewOpusPacketReader(resp.Body)
 
-	return opusReader, nil
+	usageEvent := usage.NewTextToSpeechEvent("azure", "neural", len(text))
+
+	return opusReader, usageEvent, nil
 }
 
 type OpusPacketReader struct {

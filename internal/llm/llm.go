@@ -3,15 +3,16 @@ package llm
 import (
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
 	openai "com.deablabs.teno-voice/internal/llm/openai"
+	"com.deablabs.teno-voice/internal/llm/tiktoken"
+	"com.deablabs.teno-voice/internal/usage"
 	goOpenai "github.com/sashabaranov/go-openai"
 )
 
-func GetTranscriptResponseStream(transcript string, service string, model string, botName string, personality string, toolList []string, cache string) (*goOpenai.ChatCompletionStream, error) {
+func GetTranscriptResponseStream(transcript string, service string, model string, botName string, personality string, toolList []string, cache string) (*goOpenai.ChatCompletionStream, *usage.LLMEvent, error) {
 	pb := NewPromptBuilder(botName, transcript, personality, toolList, cache)
 
 	pb.AddIntroduction()
@@ -24,13 +25,16 @@ func GetTranscriptResponseStream(transcript string, service string, model string
 
 	prompt := pb.Build()
 
-	log.Printf("Prompt: %s", prompt)
+	// log.Printf("Prompt: %s", prompt)
+
+	usageEvent := usage.NewLLMEvent(service, model, tiktoken.TokenCount(prompt, model), 0)
 
 	switch service {
 	case "openai":
-		return openai.CreateOpenAIStream(model, prompt, 1000)
+		stream, err := openai.CreateOpenAIStream(model, prompt, 1000)
+		return stream, usageEvent, err
 	default:
-		return nil, errors.New("service not found")
+		return nil, &usage.LLMEvent{}, errors.New("service not found")
 	}
 }
 
