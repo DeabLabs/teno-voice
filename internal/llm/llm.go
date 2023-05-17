@@ -90,10 +90,9 @@ func (pb *PromptBuilder) AddTools() *PromptBuilder {
 
 // AddCache adds the cache section to the prompt
 func (pb *PromptBuilder) AddCache() *PromptBuilder {
-	cacheIntro := "Below is a list of cached items. Each cached item is represented by a unique identifier (ID) and has three properties: `Type`: indicates what the cache item represents (e.g., user message, tool response, task), `Permanent`: a boolean indicating whether the item should always remain in the cache, `Content`: the actual content of the cache item. You should always consider the cache when formulating your responses (especially pending tasks) and decide whether any of the cache items can be deleted or have been completed. If you decide to delete a cache item, use the `EditCache` tool below, as you'd use any other tool."
-	cacheEditTool := "\n\nTool: EditCache\n`Description`: This tool allows you to delete an item from the cache when it is no longer needed or if the item represents a task that has been completed. To use this tool, provide the `ID` of the cache item you wish to delete.\n`Input Guide`: { \"name\": \"EditCache\", \"input\": \"<cache item ID>\" }\n`Output Guide`: The tool does not return a value, but successfully using it will remove the specified item from the cache."
+	cacheIntro := "Below is a list of cached items. Each cached item is represented by a unique identifier (ID) and has two properties: `Name`: The name of the item, which may indicate if it is a response from a tool, a task, or a piece of context to consider. `Content`: the actual content of the cache item. You should always consider the information and pending items in the cache when formulating your responses."
 	cacheContent := fmt.Sprintf("\n\nCache:\n%s", pb.cache)
-	pb.sections = append(pb.sections, cacheIntro, cacheEditTool, cacheContent)
+	pb.sections = append(pb.sections, cacheIntro, cacheContent)
 	return pb
 }
 

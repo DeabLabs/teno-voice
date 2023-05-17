@@ -392,6 +392,6 @@ func PushToCache(dependencies *deps.Deps) http.HandlerFunc {
 			return
 		}
 
-		call.responder.GetCache().AddItem(cacheItem)
+		call.responder.GetCache().AddOrUpdateItem(cacheItem)
 	}
 }
