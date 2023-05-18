@@ -1,24 +1,20 @@
 package usage
 
-import (
-	"log"
-)
-
 type UsageEvent interface {
 	UsageType() string
 }
 
 func SendEventToDB(event UsageEvent) {
-	switch e := event.(type) {
-	case *TextToSpeechEvent:
-		log.Printf("TTS event with %d characters", e.Characters)
-	case *TranscriptionEvent:
-		log.Printf("Transcription event with %0.2f minutes", e.Minutes)
-	case *LLMEvent:
-		log.Printf("LLM event with %d prompt tokens and %d completion tokens", e.PromptTokens, e.CompletionTokens)
-	default:
-		log.Printf("Unknown event")
-	}
+	// //switch e := event.(type) {
+	// case *TextToSpeechEvent:
+	// 	//log.Printf("TTS event with %d characters", e.Characters)
+	// case *TranscriptionEvent:
+	// 	//log.Printf("Transcription event with %0.2f minutes", e.Minutes)
+	// case *LLMEvent:
+	// 	//log.Printf("LLM event with %d prompt tokens and %d completion tokens", e.PromptTokens, e.CompletionTokens)
+	// default:
+	// 	//log.Printf("Unknown event")
+	// }
 }
 
 type TextToSpeechEvent struct {

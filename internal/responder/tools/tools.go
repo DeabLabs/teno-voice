@@ -17,30 +17,6 @@ type ToolMessage struct {
 	Input string `json:"input"`
 }
 
-// func IsValidToolMessage(message string) bool {
-// 	var toolMessages []ToolMessage
-// 	err := json.Unmarshal([]byte(message), &toolMessages)
-
-// 	// If there's an error, the JSON was invalid.
-// 	if err != nil {
-// 		return false
-// 	}
-
-// 	if len(toolMessages) == 0 {
-// 		return false
-// 	}
-
-// 	// Iterate through the tool messages, checking that each has a non-empty "name" and "input".
-// 	for _, toolMessage := range toolMessages {
-// 		if toolMessage.Name == "" || toolMessage.Input == "" {
-// 			return false
-// 		}
-// 	}
-
-// 	// If no invalid tool messages were found, the JSON is valid.
-// 	return true
-// }
-
 func IsValidToolMessage(message string, availableTools []Tool) bool {
 	var toolMessages []ToolMessage
 	err := json.Unmarshal([]byte(message), &toolMessages)
