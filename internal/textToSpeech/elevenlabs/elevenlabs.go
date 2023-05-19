@@ -10,6 +10,14 @@ import (
 	// Config "com.deablabs.teno-voice/internal/config"
 )
 
+type ElevenLabsConfig struct {
+	Model                    string  `json:"model"`
+	VoiceID                  string  `json:"voice_id"`
+	Stability                float64 `json:"stability"`
+	SimilarityBoost          float64 `json:"similarity_boost"`
+	OptimizeStreamingLatency int     `json:"optimize_streaming_latency"`
+}
+
 // var apiKey = Config.Environment.ElevenLabsToken
 var apiKey = ""
 

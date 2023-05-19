@@ -15,10 +15,43 @@ import (
 
 var dg = deepgram.NewClient(Config.Environment.DeepgramToken)
 
+type TranscriberConfig struct {
+	Keywords     []string
+	IgnoredUsers []string
+}
+
+type Transcriber struct {
+	BotName         string
+	Config          TranscriberConfig
+	IgnoredUsersMap map[string]struct{}
+	Responder       *responder.Responder
+}
+
+func NewTranscriber(botName string, config TranscriberConfig, responder *responder.Responder) *Transcriber {
+	ignoredUsersMap := make(map[string]struct{})
+	for _, ignoredUser := range config.IgnoredUsers {
+		ignoredUsersMap[ignoredUser] = struct{}{}
+	}
+	return &Transcriber{
+		BotName:         botName,
+		Config:          config,
+		IgnoredUsersMap: ignoredUsersMap,
+		Responder:       responder,
+	}
+}
+
+func (t *Transcriber) UpdateConfig(config TranscriberConfig) {
+	t.Config = config
+	t.IgnoredUsersMap = make(map[string]struct{})
+	for _, ignoredUser := range config.IgnoredUsers {
+		t.IgnoredUsersMap[ignoredUser] = struct{}{}
+	}
+}
+
 // deepgram s2t sdk
-func NewStream(ctx context.Context, onClose func(), responder *responder.Responder, username string, userId string) (*websocket.Conn, error) {
+func (t *Transcriber) NewStream(ctx context.Context, onClose func(), username string, userId string) (*websocket.Conn, error) {
 	// Split botname into words
-	botNameWords := strings.Split(responder.GetBotName(), " ")
+	botNameWords := strings.Split(t.BotName, " ")
 
 	ws, _, err := dg.LiveTranscription(deepgram.LiveTranscriptionOptions{
 		Punctuate:       true,
@@ -27,7 +60,7 @@ func NewStream(ctx context.Context, onClose func(), responder *responder.Respond
 		Channels:        2,
 		Interim_results: true,
 		Search:          botNameWords,
-		Keywords:        botNameWords,
+		Keywords:        append(t.Config.Keywords, botNameWords...),
 		Model:           "phonecall",
 		Tier:            "nova",
 	})
@@ -67,7 +100,7 @@ func NewStream(ctx context.Context, onClose func(), responder *responder.Respond
 
 				if ok {
 					if !jsonParsed.Path("is_final").Data().(bool) {
-						responder.InterimTranscriptionReceived()
+						t.Responder.InterimTranscriptionReceived()
 					} else {
 						// Check if the bot name was spoken
 						botNameConfidence := float64(0)
@@ -82,7 +115,7 @@ func NewStream(ctx context.Context, onClose func(), responder *responder.Respond
 							}
 						}
 						if transcription != "" {
-							responder.NewTranscription(transcription, botNameConfidence, username, userId)
+							t.Responder.NewTranscription(transcription, botNameConfidence, username, userId)
 						}
 
 						usageEvent := usage.NewTranscriptionEvent("deepgram", "nova-streaming", jsonParsed.Path("duration").Data().(float64)/60.0)
@@ -101,4 +134,9 @@ func NewStream(ctx context.Context, onClose func(), responder *responder.Respond
 	}()
 
 	return ws, err
+}
+
+func (t *Transcriber) IsIgnored(userId string) bool {
+	_, ok := t.IgnoredUsersMap[userId]
+	return ok
 }

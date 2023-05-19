@@ -13,6 +13,13 @@ import (
 	"mccoy.space/g/ogg"
 )
 
+type AzureConfig struct {
+	Model    string `validate:"required"`
+	VoiceID  string `validate:"required"`
+	Language string `validate:"required"`
+	Gender   string `validate:"required"`
+}
+
 const (
 	region        = "eastus"
 	tokenEndpoint = "https://" + region + ".api.cognitive.microsoft.com/sts/v1.0/issueToken"
@@ -36,10 +43,14 @@ type Voice struct {
 	Text    string   `xml:",chardata"`
 }
 
-type AzureTTS struct{}
+type AzureTTS struct {
+	Config AzureConfig
+}
 
-func NewAzureTTS() *AzureTTS {
-	return &AzureTTS{}
+func NewAzureTTS(config AzureConfig) *AzureTTS {
+	return &AzureTTS{
+		Config: config,
+	}
 }
 
 func getAccessToken() (string, error) {
@@ -64,32 +75,32 @@ func getAccessToken() (string, error) {
 	return string(token), nil
 }
 
-func (a *AzureTTS) Synthesize(text string) (io.ReadCloser, *usage.TextToSpeechEvent, error) {
+func (a *AzureTTS) Synthesize(text string) (io.ReadCloser, error) {
 	token, err := getAccessToken()
 	if err != nil {
-		return nil, &usage.TextToSpeechEvent{}, err
+		return nil, err
 	}
 
 	ssml := SSML{
 		Version: "1.0",
-		Lang:    "en-US",
+		Lang:    a.Config.Language,
 		Voice: Voice{
-			Lang:   "en-US",
-			Name:   "en-US-BrandonNeural",
-			Gender: "Male",
+			Lang:   a.Config.Language,
+			Name:   a.Config.VoiceID,
+			Gender: a.Config.Gender,
 			Text:   text,
 		},
 	}
 
 	ssmlBytes, err := xml.Marshal(ssml)
 	if err != nil {
-		return nil, &usage.TextToSpeechEvent{}, err
+		return nil, err
 	}
 
 	client := &http.Client{}
 	req, err := http.NewRequest("POST", ttsEndpoint, bytes.NewReader(ssmlBytes))
 	if err != nil {
-		return nil, &usage.TextToSpeechEvent{}, err
+		return nil, err
 	}
 
 	req.Header.Add("Authorization", "Bearer "+token)
@@ -99,18 +110,18 @@ func (a *AzureTTS) Synthesize(text string) (io.ReadCloser, *usage.TextToSpeechEv
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, &usage.TextToSpeechEvent{}, err
+		return nil, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, &usage.TextToSpeechEvent{}, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
 	opusReader := NewOpusPacketReader(resp.Body)
 
-	usageEvent := usage.NewTextToSpeechEvent("azure", "neural", len(text))
+	usage.NewTextToSpeechEvent("azure", a.Config.Model, len(text))
 
-	return opusReader, usageEvent, nil
+	return opusReader, nil
 }
 
 type OpusPacketReader struct {

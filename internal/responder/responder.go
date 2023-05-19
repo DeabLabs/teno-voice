@@ -1,9 +1,6 @@
 package responder
 
 import (
-	// "context"
-	// "errors"
-
 	"context"
 	"errors"
 	"fmt"
@@ -16,11 +13,9 @@ import (
 	"time"
 	"unicode"
 
-	// "strings"
-
-	// "com.deablabs.teno-voice/internal/llm"
 	"com.deablabs.teno-voice/internal/llm"
-	"com.deablabs.teno-voice/internal/responder/cache"
+	"com.deablabs.teno-voice/internal/llm/promptbuilder"
+
 	"com.deablabs.teno-voice/internal/responder/tools"
 	texttospeech "com.deablabs.teno-voice/internal/textToSpeech"
 	"com.deablabs.teno-voice/internal/transcript"
@@ -30,28 +25,43 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-type SpeakingModeType int
-
-const (
-	Unspecified SpeakingModeType = iota
-	NeverSpeak
-	AlwaysSleep
-	AutoSleep
-	NeverSleep
-)
-
-type ResponderConfig struct {
-	BotName                    string
-	Personality                string
-	SpeakingMode               SpeakingModeType
+type VoiceUXConfig struct {
+	SpeakingMode               string `validate:"required"`
 	LinesBeforeSleep           int
 	BotNameConfidenceThreshold float64
-	LLMService                 string
-	LLMModel                   string
-	TranscriptContextSize      int
-	IgnoreUser                 string
-	StopIgnoringUser           string
-	Tools                      []tools.Tool
+}
+
+type NewResponderArgs struct {
+	BotName                string
+	PlayAudioChannel       chan []byte
+	Conn                   *voice.Conn
+	TTSService             *texttospeech.TextToSpeechService
+	LLMService             *llm.LLMService
+	VoiceUXConfig          VoiceUXConfig
+	PromptContents         *promptbuilder.PromptContents
+	TranscriptSSEChannel   chan string
+	ToolMessagesSSEChannel chan string
+	RedisClient            *redis.Client
+	RedisTranscriptKey     string
+	TranscriptConfig       transcript.TranscriptConfig
+	BotId                  snowflake.ID
+}
+
+type Responder struct {
+	botName                string
+	transcript             *transcript.Transcript
+	playAudioChannel       chan []byte
+	conn                   voice.Conn
+	ttsService             texttospeech.TextToSpeechService
+	llmService             llm.LLMService
+	cancelResponse         context.CancelFunc
+	awake                  bool
+	linesSinceLastResponse int
+	VoiceUXConfig          VoiceUXConfig
+	PromptContents         promptbuilder.PromptContents
+	botId                  snowflake.ID
+	toolMessagesSSEChannel chan string
+	isSpeaking             bool
 }
 
 type audioStreamWithIndex struct {
@@ -60,88 +70,25 @@ type audioStreamWithIndex struct {
 	sentence    string
 }
 
-type Responder struct {
-	transcript             *transcript.Transcript
-	playAudioChannel       chan []byte
-	conn                   voice.Conn
-	ttsService             texttospeech.TextToSpeechService
-	cancelResponse         context.CancelFunc
-	awake                  bool
-	linesSinceLastResponse int
-	responderConfig        ResponderConfig
-	botId                  snowflake.ID
-	ignoredUsers           map[string]struct{}
-	toolMessagesSSEChannel chan string
-	cache                  *cache.Cache
-	isSpeaking             bool
-}
-
-func NewResponder(playAudioChannel chan []byte, conn *voice.Conn, ttsService texttospeech.TextToSpeechService, config ResponderConfig, transcriptSSEChannel chan string, toolMessagesSSEChannel chan string, redisClient *redis.Client, redisTranscriptKey string, botId snowflake.ID) *Responder {
+func NewResponder(args NewResponderArgs) *Responder {
 	responder := &Responder{
-		playAudioChannel:       playAudioChannel,
-		conn:                   *conn,
-		transcript:             transcript.NewTranscript(transcriptSSEChannel, redisClient, redisTranscriptKey),
-		ttsService:             ttsService,
+		botName:                args.BotName,
+		playAudioChannel:       args.PlayAudioChannel,
+		conn:                   *args.Conn,
+		transcript:             transcript.NewTranscript(args.TranscriptSSEChannel, args.RedisClient, args.RedisTranscriptKey, args.TranscriptConfig),
+		ttsService:             *args.TTSService,
+		llmService:             *args.LLMService,
+		VoiceUXConfig:          args.VoiceUXConfig,
+		PromptContents:         *args.PromptContents,
 		cancelResponse:         nil,
 		awake:                  true,
 		linesSinceLastResponse: 0,
-		responderConfig:        config,
-		botId:                  botId,
-		ignoredUsers:           make(map[string]struct{}),
-		toolMessagesSSEChannel: toolMessagesSSEChannel,
-		cache:                  cache.NewCache(),
+		botId:                  args.BotId,
+		toolMessagesSSEChannel: args.ToolMessagesSSEChannel,
 		isSpeaking:             false,
 	}
 
 	return responder
-}
-
-func (r *Responder) Configure(newConfig ResponderConfig) error {
-	if newConfig.BotName != "" {
-		r.responderConfig.BotName = newConfig.BotName
-	}
-
-	if newConfig.Personality != "" {
-		r.responderConfig.Personality = newConfig.Personality
-	}
-
-	if newConfig.SpeakingMode != 0 {
-		r.responderConfig.SpeakingMode = newConfig.SpeakingMode
-	}
-
-	if newConfig.LinesBeforeSleep != 0 {
-		r.responderConfig.LinesBeforeSleep = newConfig.LinesBeforeSleep
-	}
-
-	if newConfig.BotNameConfidenceThreshold != 0 {
-		r.responderConfig.BotNameConfidenceThreshold = newConfig.BotNameConfidenceThreshold
-	}
-
-	if newConfig.LLMService != "" {
-		r.responderConfig.LLMService = newConfig.LLMService
-	}
-
-	if newConfig.LLMModel != "" {
-		r.responderConfig.LLMModel = newConfig.LLMModel
-	}
-
-	if newConfig.TranscriptContextSize != 0 {
-		r.responderConfig.TranscriptContextSize = newConfig.TranscriptContextSize
-	}
-
-	if newConfig.IgnoreUser != "" {
-		r.ignoredUsers[newConfig.IgnoreUser] = struct{}{}
-	}
-
-	if newConfig.StopIgnoringUser != "" {
-		delete(r.ignoredUsers, newConfig.StopIgnoringUser)
-	}
-
-	if newConfig.Tools != nil {
-		r.responderConfig.Tools = newConfig.Tools
-	}
-
-	return nil
 }
 
 func (r *Responder) Respond(receivedTranscriptionTime time.Time) context.CancelFunc {
@@ -153,7 +100,7 @@ func (r *Responder) Respond(receivedTranscriptionTime time.Time) context.CancelF
 	toolMessageChan := make(chan string, 1)
 
 	// Get recent lines of the transcript
-	lines := r.transcript.GetRecentLines(r.responderConfig.TranscriptContextSize)
+	lines := r.transcript.GetTranscript()
 
 	wg := sync.WaitGroup{}
 
@@ -202,8 +149,9 @@ func (r *Responder) Respond(receivedTranscriptionTime time.Time) context.CancelF
 }
 
 func (r *Responder) getTokenStream(ctx context.Context, lines string, sentenceChan chan string, toolMessageChan chan string) {
+	log.Printf("Prompt contents: %s\n", r.PromptContents)
 	// Create the chat completion stream
-	stream, usageEvent, err := llm.GetTranscriptResponseStream(lines, r.responderConfig.LLMService, r.responderConfig.LLMModel, r.GetBotName(), r.responderConfig.Personality, tools.ToolsToStringArray(r.responderConfig.Tools), r.cache.RenderForPrompt())
+	stream, usageEvent, err := r.llmService.GetTranscriptResponseStream(lines, r.botName, &r.PromptContents)
 	if err != nil {
 		fmt.Printf("Token stream error: %v\n", err)
 		return
@@ -291,7 +239,7 @@ func (r *Responder) getTokenStream(ctx context.Context, lines string, sentenceCh
 	if toolMessageBuilder.Len() > 0 {
 		toolMessage := toolMessageBuilder.String()
 		log.Printf("Tool message: %v\n", toolMessage)
-		if tools.IsValidToolMessage(toolMessage, r.responderConfig.Tools) {
+		if tools.IsValidToolMessage(toolMessage, r.PromptContents.ToolList) {
 			toolMessageChan <- toolMessage
 			r.transcript.AddToolMessageLine(toolMessage)
 		} else {
@@ -315,7 +263,7 @@ func (r *Responder) synthesizeSentences(ctx context.Context, sentenceChan chan s
 			return
 		default:
 		}
-		opusPackets, usageEvent, err := r.ttsService.Synthesize(sentence)
+		opusPackets, err := r.ttsService.Synthesize(sentence)
 		if err != nil {
 			fmt.Printf("Error generating speech: %v\n", err)
 			continue
@@ -326,9 +274,6 @@ func (r *Responder) synthesizeSentences(ctx context.Context, sentenceChan chan s
 			sentence:    sentence,
 		}
 		sentenceIndex++
-		if !usageEvent.IsEmpty() {
-			usage.SendEventToDB(usageEvent)
-		}
 	}
 }
 
@@ -413,25 +358,25 @@ func (r *Responder) NewTranscription(line string, botNameSpoken float64, usernam
 		Time:     time.Now(),
 	}
 
-	r.transcript.AddLine(newLine)
+	r.transcript.AddSpokenLine(newLine)
 	r.linesSinceLastResponse++
 
 	if r.cancelResponse != nil {
 		r.cancelResponse()
 	}
 
-	switch r.responderConfig.SpeakingMode {
-	case NeverSpeak:
+	switch r.VoiceUXConfig.SpeakingMode {
+	case "NeverSpeak":
 		return
-	case AlwaysSleep:
+	case "AlwaysSleep":
 		r.awake = false
-	case AutoSleep:
-		if r.linesSinceLastResponse > r.responderConfig.LinesBeforeSleep {
+	case "AutoSleep":
+		if r.linesSinceLastResponse > r.VoiceUXConfig.LinesBeforeSleep {
 			r.awake = false
 			// log.Printf("Bot is asleep\n")
 		}
 
-		if botNameSpoken > r.responderConfig.BotNameConfidenceThreshold {
+		if botNameSpoken > r.VoiceUXConfig.BotNameConfidenceThreshold {
 			r.awake = true
 			r.linesSinceLastResponse = 0
 			// log.Printf("Bot is awake\n")
@@ -443,7 +388,7 @@ func (r *Responder) NewTranscription(line string, botNameSpoken float64, usernam
 	// Only respond if the bot is awake
 	if r.awake {
 		if r.isSpeaking {
-			r.transcript.AddInterruptionLine(username, r.GetBotName())
+			r.transcript.AddInterruptionLine(username, r.botName)
 		}
 		r.cancelResponse = r.Respond(receivedTranscriptionTime)
 	}
@@ -452,11 +397,11 @@ func (r *Responder) NewTranscription(line string, botNameSpoken float64, usernam
 func (r *Responder) botLineSpoken(line string) {
 	newLine := &transcript.Line{
 		Text:     line,
-		Username: r.responderConfig.BotName,
+		Username: r.botName,
 		UserId:   r.botId.String(),
 		Time:     time.Now(),
 	}
-	r.transcript.AddLine(newLine)
+	r.transcript.AddSpokenLine(newLine)
 
 	// Reset the counter when the bot speaks
 	r.linesSinceLastResponse = 0
@@ -546,26 +491,4 @@ func (r *Responder) sendSilentFrames(frames int) {
 		// Send the payload to the playAudioChannel
 		r.playAudioChannel <- silenceOpusFrame
 	}
-}
-
-func (r *Responder) SetSpeakingMode(mode SpeakingModeType) {
-	r.responderConfig.SpeakingMode = mode
-}
-
-// IsIgnored checks if a user is ignored
-func (r *Responder) IsIgnored(userId string) bool {
-	_, ok := r.ignoredUsers[userId]
-	return ok
-}
-
-func (r *Responder) GetBotName() string {
-	return r.responderConfig.BotName
-}
-
-func (r *Responder) GetCache() *cache.Cache {
-	return r.cache
-}
-
-func (r *Responder) GetTranscript() *transcript.Transcript {
-	return r.transcript
 }

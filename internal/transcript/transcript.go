@@ -7,6 +7,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -17,6 +18,12 @@ type Transcript struct {
 	transcriptSSEChannel chan string
 	redisClient          redis.Client
 	transcriptKey        string
+	config               TranscriptConfig
+	mu                   sync.Mutex
+}
+
+type TranscriptConfig struct {
+	NumberOfTranscriptLines int `validate:"required"`
 }
 
 type Line struct {
@@ -26,18 +33,43 @@ type Line struct {
 	Time     time.Time
 }
 
-func NewTranscript(transcriptSSEChannel chan string, redisClient *redis.Client, transcriptKey string) *Transcript {
+func NewTranscript(transcriptSSEChannel chan string, redisClient *redis.Client, transcriptKey string, config TranscriptConfig) *Transcript {
 	return &Transcript{
 		lines:                make([]string, 0),
 		transcriptSSEChannel: transcriptSSEChannel,
 		redisClient:          *redisClient,
 		transcriptKey:        transcriptKey,
+		config:               config,
 	}
 }
 
-func (t *Transcript) AddLine(line *Line) error {
-	formattedText := formatLine(*line)
+func (t *Transcript) addLine(formattedText string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	// If the slice has reached the max limit from config, remove the oldest element before appending.
+	if len(t.lines) >= t.config.NumberOfTranscriptLines {
+		t.lines = t.lines[1:]
+	}
 	t.lines = append(t.lines, formattedText)
+}
+
+func (t *Transcript) UpdateConfig(config TranscriptConfig) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	// Check if we need to trim lines.
+	if config.NumberOfTranscriptLines < len(t.lines) {
+		// Trim from the beginning.
+		t.lines = t.lines[len(t.lines)-config.NumberOfTranscriptLines:]
+	}
+	// Update the config.
+	t.config = config
+}
+
+func (t *Transcript) AddSpokenLine(line *Line) error {
+	formattedText := formatLine(*line)
+	t.addLine(formattedText)
 
 	go func() {
 		redisText := formatForRedis(*line, formattedText)
@@ -57,26 +89,17 @@ func (t *Transcript) AddLine(line *Line) error {
 
 func (t *Transcript) AddInterruptionLine(username string, botName string) {
 	line := fmt.Sprintf("[%s interrupted %s]", username, botName)
-	t.lines = append(t.lines, line)
+	t.addLine(line)
 }
 
 func (t *Transcript) AddToolMessageLine(toolMessage string) {
 	toolMessageLine := fmt.Sprintf("|%s", toolMessage)
-	t.lines = append(t.lines, toolMessageLine)
+	t.addLine(toolMessageLine)
 }
 
-func (t *Transcript) GetTranscript() []string {
-	return t.lines
-}
-
-// Get recent lines as a string separated by newlines
-func (t *Transcript) GetRecentLines(numLines int) string {
-	if numLines > len(t.lines) {
-		numLines = len(t.lines)
-	}
-
-	lines := t.lines[len(t.lines)-numLines:]
-	return strings.Join(lines, "\n")
+// Get lines as a string separated by newlines
+func (t *Transcript) GetTranscript() string {
+	return strings.Join(t.lines, "\n")
 }
 
 func (t *Transcript) SendLineToRedis(line Line, formattedLine string) error {

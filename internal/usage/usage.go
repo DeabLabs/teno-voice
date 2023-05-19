@@ -24,11 +24,12 @@ type TextToSpeechEvent struct {
 	// other common fields...
 }
 
-func NewTextToSpeechEvent(service string, model string, characters int) *TextToSpeechEvent {
-	return &TextToSpeechEvent{Service: service, Model: model, Characters: characters}
+func NewTextToSpeechEvent(service string, model string, characters int) {
+	usageEvent := &TextToSpeechEvent{Service: service, Model: model, Characters: characters}
+	SendEventToDB(usageEvent)
 }
 
-func (t *TextToSpeechEvent) UsageType() string {
+func (t TextToSpeechEvent) UsageType() string {
 	return "TextToSpeech"
 }
 
@@ -47,7 +48,7 @@ func NewTranscriptionEvent(service string, model string, minutes float64) *Trans
 	return &TranscriptionEvent{Minutes: minutes}
 }
 
-func (t *TranscriptionEvent) UsageType() string {
+func (t TranscriptionEvent) UsageType() string {
 	return "Transcription"
 }
 
@@ -64,7 +65,8 @@ type LLMEvent struct {
 }
 
 func NewLLMEvent(service string, model string, promptTokens int, completionTokens int) *LLMEvent {
-	return &LLMEvent{Service: service, Model: model, PromptTokens: promptTokens, CompletionTokens: completionTokens}
+	usageEvent := &LLMEvent{Service: service, Model: model, PromptTokens: promptTokens, CompletionTokens: completionTokens}
+	return usageEvent
 }
 
 func (l *LLMEvent) SetCompletionTokens(tokens int) {
@@ -75,6 +77,6 @@ func (l *LLMEvent) IsEmpty() bool {
 	return *l == LLMEvent{}
 }
 
-func (l *LLMEvent) UsageType() string {
+func (l LLMEvent) UsageType() string {
 	return "LLM"
 }

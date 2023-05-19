@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"com.deablabs.teno-voice/internal/responder"
 	speechtotext "com.deablabs.teno-voice/internal/speechToText"
 	"github.com/disgoorg/disgo/bot"
 	"github.com/disgoorg/disgo/voice"
@@ -24,16 +23,16 @@ type Speaker struct {
 	StreamContext       context.Context
 	ContextCancel       context.CancelFunc
 	StreamActive        bool
-	responder           *responder.Responder
+	transcriber         *speechtotext.Transcriber
 }
 
-func (s *Speaker) Init(ctx context.Context, responder *responder.Responder) {
+func (s *Speaker) Init(ctx context.Context, transcriber *speechtotext.Transcriber) {
 	newContext, cancel := context.WithCancel(context.Background())
 	s.StreamContext = newContext
 	s.ContextCancel = cancel
-	s.responder = responder
+	s.transcriber = transcriber
 
-	wsc, err := speechtotext.NewStream(s.StreamContext, s.Close, responder, s.Username, s.ID.String())
+	wsc, err := s.transcriber.NewStream(s.StreamContext, s.Close, s.Username, s.ID.String())
 
 	if err != nil {
 		panic("error getting transcription stream: " + err.Error())
@@ -56,7 +55,7 @@ func (s *Speaker) AddPacket(ctx context.Context, packet []byte) {
 	defer s.Mu.Unlock()
 
 	if !s.StreamActive {
-		s.Init(ctx, s.responder)
+		s.Init(ctx, s.transcriber)
 	}
 
 	s.transcriptionStream.WriteMessage(websocket.BinaryMessage, packet)
@@ -107,7 +106,7 @@ func WriteToVoiceConnection(ctx context.Context, connection *voice.Conn, playAud
 	}
 }
 
-func HandleIncomingPackets(ctx context.Context, clientAdress *bot.Client, connection *voice.Conn, speakers map[snowflake.ID]*Speaker, newSpeakerMutex *sync.Mutex, responder *responder.Responder) {
+func HandleIncomingPackets(ctx context.Context, clientAdress *bot.Client, connection *voice.Conn, speakers map[snowflake.ID]*Speaker, newSpeakerMutex *sync.Mutex, transcriber *speechtotext.Transcriber) {
 	conn := *connection
 	client := *clientAdress
 
@@ -134,7 +133,7 @@ func HandleIncomingPackets(ctx context.Context, clientAdress *bot.Client, connec
 			}
 
 			// ignore packets from the responder's ignore list
-			if responder.IsIgnored(userID.String()) {
+			if transcriber.IsIgnored(userID.String()) {
 				continue
 			}
 
@@ -158,7 +157,7 @@ func HandleIncomingPackets(ctx context.Context, clientAdress *bot.Client, connec
 
 				speakers[userID] = s
 
-				s.Init(ctx, responder)
+				s.Init(ctx, transcriber)
 			}
 			newSpeakerMutex.Unlock()
 

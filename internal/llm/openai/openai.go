@@ -5,25 +5,68 @@ import (
 	"errors"
 
 	Config "com.deablabs.teno-voice/internal/config"
-	openai "github.com/sashabaranov/go-openai"
+	"com.deablabs.teno-voice/internal/llm/promptbuilder"
+	"com.deablabs.teno-voice/internal/llm/tiktoken"
+	"com.deablabs.teno-voice/internal/usage"
+	goOpenai "github.com/sashabaranov/go-openai"
 )
+
+type OpenAIConfig struct {
+	Model string `validate:"required"`
+}
+
+type OpenAILLM struct {
+	Config OpenAIConfig
+}
+
+func NewOpenAILLM(config OpenAIConfig) *OpenAILLM {
+	return &OpenAILLM{
+		Config: config,
+	}
+}
 
 var openAiToken = Config.Environment.OpenAIToken
 
-func CreateOpenAIStream(model string, prompt string, maxTokens int) (*openai.ChatCompletionStream, error) {
+func (o *OpenAILLM) GetTranscriptResponseStream(transcript string, botName string, promptContents *promptbuilder.PromptContents) (*goOpenai.ChatCompletionStream, usage.LLMEvent, error) {
+	pb := promptbuilder.NewPromptBuilder(botName, transcript, promptContents.Personality, promptContents.ToolList, promptContents.Cache, promptContents.Tasks)
+
+	pb.AddIntroduction()
+
+	pb.AddTools()
+
+	pb.AddCache()
+
+	pb.AddTasks()
+
+	pb.AddTranscript()
+
+	prompt := pb.Build()
+
+	stream, err := CreateOpenAIStream(o.Config.Model, prompt, 1000)
+	if err != nil {
+		return nil, usage.LLMEvent{}, err
+	}
+
+	usageEvent := usage.NewLLMEvent("service", o.Config.Model, tiktoken.TokenCount(prompt, o.Config.Model), 0)
+
+	return stream, *usageEvent, err
+
+}
+
+func CreateOpenAIStream(model string, prompt string, maxTokens int) (*goOpenai.ChatCompletionStream, error) {
 	// Initialize OpenAI client
-	c := openai.NewClient(openAiToken)
+	c := goOpenai.NewClient(openAiToken)
 	ctx := context.Background()
 
 	// log.Printf("Prompt: " + prompt)
 
 	// Set up the request to OpenAI with the required parameters
-	req := openai.ChatCompletionRequest{
+	req := goOpenai.ChatCompletionRequest{
 		Model:     model,
 		MaxTokens: maxTokens,
-		Messages: []openai.ChatCompletionMessage{
+		Messages: []goOpenai.ChatCompletionMessage{
 			{
-				Role:    openai.ChatMessageRoleUser,
+				Role:    goOpenai.ChatMessageRoleUser,
 				Content: prompt,
 			},
 		},
