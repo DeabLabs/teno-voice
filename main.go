@@ -35,22 +35,10 @@ func main() {
 
 	defer redisCloseClient()
 
-	// token := Config.Environment.DiscordToken
-
-	// log.Info("Waiting for discord client to be ready")
-
-	// discordClient, closeClient, err := discord.NewClient(context.Background(), token)
-
-	// if err != nil {
-	// 	log.Fatal("error creating discord client: ", err)
-	// }
-
-	// defer closeClient()
-
 	// create a new instance of the Deps struct
 	// We pass this struct into the handlers so they can access the discord client
 	// and kill signal
-	dependencies := &deps.Deps{DiscordClient: nil, RedisClient: redisClient, Validate: validate}
+	dependencies := &deps.Deps{RedisClient: redisClient, Validate: validate}
 
 	// Set up the router, connected to discord functionality
 	router := chi.NewRouter()

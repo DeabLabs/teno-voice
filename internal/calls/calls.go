@@ -117,8 +117,6 @@ func JoinVoiceChannel(dependencies *deps.Deps) func(w http.ResponseWriter, r *ht
 
 		time.Sleep(time.Second * 1)
 
-		//discordClient := *dependencies.DiscordClient
-
 		joinCtx := r.Context()
 		joinCtx, cancel := context.WithTimeout(joinCtx, time.Second*10)
 		defer cancel()
