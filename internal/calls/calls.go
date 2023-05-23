@@ -154,6 +154,8 @@ func JoinVoiceChannel(dependencies *deps.Deps) func(w http.ResponseWriter, r *ht
 			redisClient = redis.Client{}
 		}
 
+		ongoingCtx, cancel := context.WithCancel(context.Background())
+
 		playAudioChannel := make(chan []byte)
 
 		responderArgs := responder.NewResponderArgs{
@@ -172,7 +174,7 @@ func JoinVoiceChannel(dependencies *deps.Deps) func(w http.ResponseWriter, r *ht
 			BotId:                  discordClient.ID(),
 		}
 
-		responder := responder.NewResponder(responderArgs)
+		responder := responder.NewResponder(ongoingCtx, responderArgs)
 
 		transcriber := speechtotext.NewTranscriber(joinReq.Config.BotName, *joinReq.Config.TranscriberConfig, responder)
 
@@ -195,15 +197,17 @@ func JoinVoiceChannel(dependencies *deps.Deps) func(w http.ResponseWriter, r *ht
 		calls[callId] = newCall
 		callsMutex.Unlock()
 
-		ongoingCtx, cancel := context.WithCancel(context.Background())
-
 		go discord.WriteToVoiceConnection(ongoingCtx, &conn, playAudioChannel)
 
 		newSpeakerMutex := sync.Mutex{}
-		go discord.HandleIncomingPackets(ongoingCtx, &discordClient, &conn, Speakers, &newSpeakerMutex, transcriber)
+		go discord.HandleIncomingPackets(ongoingCtx, cancel, &discordClient, &conn, Speakers, &newSpeakerMutex, transcriber)
 
 		go func() {
-			<-closeSignal
+			select {
+			case <-closeSignal:
+			case <-ongoingCtx.Done():
+			}
+
 			leaveCtx, leaveCancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer leaveCancel()
 			conn.Close(leaveCtx)
@@ -216,6 +220,9 @@ func JoinVoiceChannel(dependencies *deps.Deps) func(w http.ResponseWriter, r *ht
 
 			// Cancel the context.
 			cancel()
+
+			// Close the closeSignal channel.
+			close(closeSignal)
 		}()
 
 		w.Write([]byte("Joined voice channel"))

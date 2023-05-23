@@ -81,6 +81,11 @@ func (t *Transcript) AddInterruptionLine(username string, botName string) {
 	t.addLine(line)
 }
 
+func (t *Transcript) AddTaskReminderLine() {
+	line := "[Tasks pending]"
+	t.addLine(line)
+}
+
 func (t *Transcript) AddToolMessageLine(toolMessage string) {
 	toolMessageLine := fmt.Sprintf("|%s", toolMessage)
 	t.addLine(toolMessageLine)

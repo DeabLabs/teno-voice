@@ -106,7 +106,7 @@ func WriteToVoiceConnection(ctx context.Context, connection *voice.Conn, playAud
 	}
 }
 
-func HandleIncomingPackets(ctx context.Context, clientAdress *bot.Client, connection *voice.Conn, speakers map[snowflake.ID]*Speaker, newSpeakerMutex *sync.Mutex, transcriber *speechtotext.Transcriber) {
+func HandleIncomingPackets(ctx context.Context, cancelFunc context.CancelFunc, clientAdress *bot.Client, connection *voice.Conn, speakers map[snowflake.ID]*Speaker, newSpeakerMutex *sync.Mutex, transcriber *speechtotext.Transcriber) {
 	conn := *connection
 	client := *clientAdress
 
@@ -119,6 +119,7 @@ func HandleIncomingPackets(ctx context.Context, clientAdress *bot.Client, connec
 			if err != nil {
 				if errors.Is(err, net.ErrClosed) {
 					println("connection closed")
+					cancelFunc()
 					return
 				}
 				fmt.Printf("error while reading from reader: %s", err)

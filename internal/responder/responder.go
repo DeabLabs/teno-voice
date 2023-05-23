@@ -8,7 +8,6 @@ import (
 	"log"
 	"math"
 	"net"
-	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +29,7 @@ type VoiceUXConfig struct {
 	SpeakingMode               string `validate:"required"`
 	LinesBeforeSleep           int
 	BotNameConfidenceThreshold float64
+	AutoRespondInterval        int
 }
 
 type NewResponderArgs struct {
@@ -63,6 +63,8 @@ type Responder struct {
 	botId                  snowflake.ID
 	toolMessagesSSEChannel chan string
 	isSpeaking             bool
+	isResponding           bool
+	LastResponseEnd        time.Time
 }
 
 type audioStreamWithIndex struct {
@@ -71,7 +73,7 @@ type audioStreamWithIndex struct {
 	sentence    string
 }
 
-func NewResponder(args NewResponderArgs) *Responder {
+func NewResponder(ctx context.Context, args NewResponderArgs) *Responder {
 	responder := &Responder{
 		BotName:                args.BotName,
 		playAudioChannel:       args.PlayAudioChannel,
@@ -87,26 +89,17 @@ func NewResponder(args NewResponderArgs) *Responder {
 		botId:                  args.BotId,
 		toolMessagesSSEChannel: args.ToolMessagesSSEChannel,
 		isSpeaking:             false,
+		isResponding:           false,
+		LastResponseEnd:        time.Now(),
 	}
+
+	go responder.AutoRespond(ctx)
 
 	return responder
 }
 
-func (r *Responder) UpdateConfig(newVoiceUxConfig VoiceUXConfig, newPromptContents promptbuilder.PromptContents) {
-	if reflect.DeepEqual(r.VoiceUXConfig, newVoiceUxConfig) {
-		return
-	} else {
-		r.VoiceUXConfig = newVoiceUxConfig
-	}
-
-	if reflect.DeepEqual(r.PromptContents, newPromptContents) {
-		return
-	} else {
-		r.PromptContents = newPromptContents
-	}
-}
-
 func (r *Responder) Respond(receivedTranscriptionTime time.Time) context.CancelFunc {
+	r.isResponding = true
 	ctx, cancelFunc := context.WithCancel(context.Background())
 	sentenceChan := make(chan string)
 	audioStreamChan := make(chan audioStreamWithIndex, 100)
@@ -155,6 +148,8 @@ func (r *Responder) Respond(receivedTranscriptionTime time.Time) context.CancelF
 				r.toolMessagesSSEChannel <- toolMessage
 			}
 		}
+
+		r.isResponding = false
 
 		// After all other goroutines have finished, close the toolMessageChan
 		close(toolMessageChan)
@@ -274,6 +269,7 @@ func (r *Responder) synthesizeSentences(ctx context.Context, sentenceChan chan s
 	for sentence := range sentenceChan {
 		select {
 		case <-ctx.Done():
+			r.isResponding = false
 			return
 		default:
 		}
@@ -333,6 +329,7 @@ func (r *Responder) playSynthesizedSentences(ctx context.Context, receivedTransc
 					r.sendSilentFrames(5)
 					r.setSpeaking(false)
 					opusPackets.Close()
+					r.isResponding = false
 					return
 				default:
 				}
@@ -360,6 +357,8 @@ func (r *Responder) playSynthesizedSentences(ctx context.Context, receivedTransc
 		r.setSpeaking(false)
 	}
 	r.isSpeaking = false
+	r.isResponding = false
+	r.LastResponseEnd = time.Now()
 }
 
 func (r *Responder) NewTranscription(line string, botNameSpoken float64, username string, userId string) {
@@ -425,6 +424,37 @@ func (r *Responder) InterimTranscriptionReceived() {
 	if r.cancelResponse != nil {
 		r.cancelResponse()
 	}
+}
+
+func (r *Responder) AutoRespond(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			if r.VoiceUXConfig.AutoRespondInterval != 0 && !r.isResponding && len(r.PromptContents.Tasks) > 0 {
+				// Check if AutoRespondInterval time has passed since the last response
+				if time.Since(r.LastResponseEnd) >= time.Duration(r.VoiceUXConfig.AutoRespondInterval)*time.Second {
+					r.Transcript.AddTaskReminderLine()
+					r.Respond(time.Now())
+				}
+				time.Sleep(time.Duration(max(1, r.VoiceUXConfig.AutoRespondInterval)) * time.Second)
+			} else {
+				// If AutoRespondInterval is zero, or isSpeaking is true, then we can simply continue without sleeping or responding.
+				// Adding a sleep equivalent to AutoRespondInterval to prevent a busy wait loop that could consume CPU.
+				// We use max(1, AutoRespondInterval) to ensure that there's always some sleep even when AutoRespondInterval is zero.
+				time.Sleep(time.Duration(max(1, r.VoiceUXConfig.AutoRespondInterval)) * time.Second)
+			}
+		}
+	}
+}
+
+// Utility function to get the maximum of two integers.
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // isEndOfSentence checks if a token ends with a sentence-ending character or a sentence-ending character followed by a quote
