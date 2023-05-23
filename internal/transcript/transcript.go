@@ -58,13 +58,15 @@ func (t *Transcript) AddSpokenLine(line *Line) error {
 	formattedText := formatLine(*line)
 	t.addLine(formattedText)
 
-	go func() {
-		redisText := formatForRedis(*line, formattedText)
-		err := t.SendLineToRedis(*line, redisText)
-		if err != nil {
-			fmt.Printf("SendLineToRedis error: %v\n", err)
-		}
-	}()
+	if t.transcriptKey != "" {
+		go func() {
+			redisText := formatForRedis(*line, formattedText)
+			err := t.SendLineToRedis(*line, redisText)
+			if err != nil {
+				fmt.Printf("SendLineToRedis error: %v\n", err)
+			}
+		}()
+	}
 
 	select {
 	case t.transcriptSSEChannel <- formattedText:

@@ -22,20 +22,16 @@ import (
 	"github.com/disgoorg/disgo/voice"
 	"github.com/disgoorg/snowflake/v2"
 	"github.com/go-chi/chi"
+	"github.com/redis/go-redis/v9"
 )
 
 type JoinRequest struct {
-	GuildID            string
-	ChannelID          string
+	BotID              string `validate:"required"`
+	BotToken           string `validate:"required"`
+	GuildID            string `validate:"required"`
+	ChannelID          string `validate:"required"`
 	RedisTranscriptKey string
-	Config             Config
-}
-
-type ValidatedJoinRequest struct {
-	GuildID            snowflake.ID
-	ChannelID          snowflake.ID
-	RedisTranscriptKey string
-	Config             Config
+	Config             Config `validate:"required"`
 }
 
 type Config struct {
@@ -48,10 +44,6 @@ type Config struct {
 	TranscriberConfig *speechtotext.TranscriberConfig `validate:"required"`
 }
 
-type LeaveRequest struct {
-	GuildID string
-}
-
 type Call struct {
 	connection          *voice.Conn
 	closeSignalChan     chan struct{}
@@ -62,7 +54,7 @@ type Call struct {
 }
 
 var callsMutex sync.Mutex
-var calls = make(map[snowflake.ID]*Call)
+var calls = make(map[string]*Call)
 
 func JoinVoiceChannel(dependencies *deps.Deps) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -78,10 +70,6 @@ func JoinVoiceChannel(dependencies *deps.Deps) func(w http.ResponseWriter, r *ht
 			}
 			return
 		}
-
-		joinCtx := r.Context()
-		joinCtx, cancel := context.WithTimeout(joinCtx, time.Second*5)
-		defer cancel()
 
 		// Validate Snowflake IDs
 		guildID, err := snowflake.Parse(joinReq.GuildID)
@@ -120,7 +108,20 @@ func JoinVoiceChannel(dependencies *deps.Deps) func(w http.ResponseWriter, r *ht
 			return
 		}
 
-		discordClient := *dependencies.DiscordClient
+		// Create discord client
+		discordClient, closeClient, err := discord.NewClient(context.Background(), joinReq.BotToken)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		time.Sleep(time.Second * 1)
+
+		//discordClient := *dependencies.DiscordClient
+
+		joinCtx := r.Context()
+		joinCtx, cancel := context.WithTimeout(joinCtx, time.Second*10)
+		defer cancel()
 
 		// Setup voice connection
 		conn, err := discord.SetupVoiceConnection(joinCtx, &discordClient, guildID, channelID)
@@ -147,7 +148,13 @@ func JoinVoiceChannel(dependencies *deps.Deps) func(w http.ResponseWriter, r *ht
 		// Make sse channel for tool messages
 		toolMessagesSSEChannel := make(chan string)
 
-		redisClient := *dependencies.RedisClient
+		var redisClient redis.Client
+
+		if joinReq.RedisTranscriptKey != "" {
+			redisClient = *dependencies.RedisClient
+		} else {
+			redisClient = redis.Client{}
+		}
 
 		playAudioChannel := make(chan []byte)
 
@@ -183,9 +190,11 @@ func JoinVoiceChannel(dependencies *deps.Deps) func(w http.ResponseWriter, r *ht
 			transcriber:         transcriber,
 		}
 
+		callId := joinReq.BotID + "-" + joinReq.GuildID
+
 		// Store the call in the map.
 		callsMutex.Lock()
-		calls[guildID] = newCall
+		calls[callId] = newCall
 		callsMutex.Unlock()
 
 		ongoingCtx, cancel := context.WithCancel(context.Background())
@@ -200,10 +209,11 @@ func JoinVoiceChannel(dependencies *deps.Deps) func(w http.ResponseWriter, r *ht
 			leaveCtx, leaveCancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer leaveCancel()
 			conn.Close(leaveCtx)
+			closeClient()
 
 			// Clean up the call from the calls map.
 			callsMutex.Lock()
-			delete(calls, guildID)
+			delete(calls, callId)
 			callsMutex.Unlock()
 
 			// Cancel the context.
@@ -218,29 +228,12 @@ func LeaveVoiceChannel(dependencies *deps.Deps) http.HandlerFunc {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("LeaveVoiceCall called")
 
-		var lr LeaveRequest
-
-		err := helpers.DecodeJSONBody(w, r, &lr)
-		if err != nil {
-			var mr *helpers.MalformedRequest
-			if errors.As(err, &mr) {
-				http.Error(w, mr.Msg, mr.Status)
-			} else {
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			}
-			return
-		}
-
-		guildID, err := snowflake.Parse(lr.GuildID)
-		if err != nil {
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
-		}
+		callId := chi.URLParam(r, "bot_id") + "-" + chi.URLParam(r, "guild_id")
 
 		callsMutex.Lock()
 		defer callsMutex.Unlock()
 
-		call, ok := calls[guildID]
+		call, ok := calls[callId]
 		if !ok {
 			w.Write([]byte("Not in voice call"))
 			return
@@ -250,7 +243,7 @@ func LeaveVoiceChannel(dependencies *deps.Deps) http.HandlerFunc {
 		call.closeSignalChan <- struct{}{}
 
 		// Remove the closeSignal from the closeChannels map.
-		delete(calls, guildID)
+		delete(calls, callId)
 
 		w.Write([]byte("Left voice call"))
 	})
@@ -265,22 +258,16 @@ func UpdateConfig(dependencies *deps.Deps) func(w http.ResponseWriter, r *http.R
 
 		// Validate the struct
 
-		guildIDStr := chi.URLParam(r, "guild_id")
-
-		guildID, err := snowflake.Parse(guildIDStr)
-		if err != nil {
-			http.Error(w, "Invalid guild ID", http.StatusBadRequest)
-			return
-		}
+		callId := chi.URLParam(r, "bot_id") + "-" + chi.URLParam(r, "guild_id")
 
 		// Get the call for the given guildID
-		call, ok := calls[guildID]
+		call, ok := calls[callId]
 		if !ok {
 			http.Error(w, "Call not found", http.StatusNotFound)
 			return
 		}
 
-		err = helpers.DecodeJSONBody(w, r, &config)
+		err := helpers.DecodeJSONBody(w, r, &config)
 		if err != nil {
 			var mr *helpers.MalformedRequest
 			if errors.As(err, &mr) {
@@ -353,16 +340,10 @@ func UpdateConfig(dependencies *deps.Deps) func(w http.ResponseWriter, r *http.R
 
 func TranscriptSSEHandler(dependencies *deps.Deps) http.HandlerFunc {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		guildIDStr := chi.URLParam(r, "guild_id")
-
-		guildID, err := snowflake.Parse(guildIDStr)
-		if err != nil {
-			http.Error(w, "Invalid guild ID", http.StatusBadRequest)
-			return
-		}
+		callId := chi.URLParam(r, "bot_id") + "-" + chi.URLParam(r, "guild_id")
 
 		callsMutex.Lock()
-		call, ok := calls[guildID]
+		call, ok := calls[callId]
 		if !ok {
 			http.Error(w, "Not in voice call", http.StatusNotFound)
 			return
@@ -403,16 +384,10 @@ func TranscriptSSEHandler(dependencies *deps.Deps) http.HandlerFunc {
 
 func ToolMessagesSSEHandler(dependencies *deps.Deps) http.HandlerFunc {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		guildIDStr := chi.URLParam(r, "guild_id")
-
-		guildID, err := snowflake.Parse(guildIDStr)
-		if err != nil {
-			http.Error(w, "Invalid guild ID", http.StatusBadRequest)
-			return
-		}
+		callId := chi.URLParam(r, "bot_id") + "-" + chi.URLParam(r, "guild_id")
 
 		callsMutex.Lock()
-		call, ok := calls[guildID]
+		call, ok := calls[callId]
 		if !ok {
 			http.Error(w, "Not in voice call", http.StatusNotFound)
 			return

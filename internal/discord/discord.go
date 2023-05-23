@@ -65,7 +65,7 @@ func SetupVoiceConnection(ctx context.Context, clientAdress *bot.Client, guildID
 	client := *clientAdress
 	conn := client.VoiceManager().CreateConn(guildID)
 
-	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
+	ctx, cancel := context.WithTimeout(ctx, time.Second*10)
 	defer cancel()
 	if err := conn.Open(ctx, channelID, false, false); err != nil {
 		return nil, fmt.Errorf("error connecting to voice channel: %s", err.Error())
