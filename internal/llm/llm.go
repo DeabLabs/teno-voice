@@ -33,7 +33,7 @@ func LLMConfigValidation(fl validator.FieldLevel) bool {
 
 	// Add more checks based on the service type
 	switch config.LLMServiceName {
-	case "OpenAI":
+	case "openai":
 		// Cast to OpenAI's config and validate
 		openAIConfig, ok := config.LLMConfig.(openai.OpenAIConfig)
 		if !ok {

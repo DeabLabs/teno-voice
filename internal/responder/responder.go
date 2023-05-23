@@ -149,7 +149,6 @@ func (r *Responder) Respond(receivedTranscriptionTime time.Time) context.CancelF
 }
 
 func (r *Responder) getTokenStream(ctx context.Context, lines string, sentenceChan chan string, toolMessageChan chan string) {
-	log.Printf("Prompt contents: %s\n", r.PromptContents)
 	// Create the chat completion stream
 	stream, usageEvent, err := r.llmService.GetTranscriptResponseStream(lines, r.botName, &r.PromptContents)
 	if err != nil {

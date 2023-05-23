@@ -8,12 +8,12 @@ import (
 	"net/http"
 	"time"
 
-	Config "com.deablabs.teno-voice/internal/config"
 	"com.deablabs.teno-voice/internal/usage"
 	"mccoy.space/g/ogg"
 )
 
 type AzureConfig struct {
+	ApiKey   string `validate:"required"`
 	Model    string `validate:"required"`
 	VoiceID  string `validate:"required"`
 	Language string `validate:"required"`
@@ -25,8 +25,6 @@ const (
 	tokenEndpoint = "https://" + region + ".api.cognitive.microsoft.com/sts/v1.0/issueToken"
 	ttsEndpoint   = "https://" + region + ".tts.speech.microsoft.com/cognitiveservices/v1"
 )
-
-var subscriptionKey = Config.Environment.AzureToken
 
 type SSML struct {
 	XMLName xml.Name `xml:"speak"`
@@ -53,13 +51,13 @@ func NewAzureTTS(config AzureConfig) *AzureTTS {
 	}
 }
 
-func getAccessToken() (string, error) {
+func (a *AzureTTS) getAccessToken() (string, error) {
 	client := &http.Client{}
 	req, err := http.NewRequest("POST", tokenEndpoint, nil)
 	if err != nil {
 		return "", err
 	}
-	req.Header.Add("Ocp-Apim-Subscription-Key", subscriptionKey)
+	req.Header.Add("Ocp-Apim-Subscription-Key", a.Config.ApiKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -76,7 +74,7 @@ func getAccessToken() (string, error) {
 }
 
 func (a *AzureTTS) Synthesize(text string) (io.ReadCloser, error) {
-	token, err := getAccessToken()
+	token, err := a.getAccessToken()
 	if err != nil {
 		return nil, err
 	}

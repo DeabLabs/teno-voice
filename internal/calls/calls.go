@@ -38,13 +38,13 @@ type ValidatedJoinRequest struct {
 }
 
 type Config struct {
-	BotName           string `validate:"required"`
-	PromptContents    promptbuilder.PromptContents
-	VoiceUXConfig     responder.VoiceUXConfig
-	LLMConfig         llm.LLMConfigPayload          `validate:"LLMConfigValidation"`
-	TTSConfig         texttospeech.TTSConfigPayload `validate:"TTSConfigValidation"`
-	TranscriptConfig  transcript.TranscriptConfig
-	TranscriberConfig speechtotext.TranscriberConfig
+	BotName           string                         `validate:"required"`
+	PromptContents    promptbuilder.PromptContents   `validate:"required"`
+	VoiceUXConfig     responder.VoiceUXConfig        `validate:"required"`
+	LLMConfig         llm.LLMConfigPayload           `validate:"required,LLMConfigValidation"`
+	TTSConfig         texttospeech.TTSConfigPayload  `validate:"required,TTSConfigValidation"`
+	TranscriptConfig  transcript.TranscriptConfig    `validate:"required"`
+	TranscriberConfig speechtotext.TranscriberConfig `validate:"required"`
 }
 
 // func (jr *JoinRequest) validateAndParse() (ValidatedJoinRequest, error) {
@@ -144,6 +144,20 @@ func JoinVoiceChannel(dependencies *deps.Deps) func(w http.ResponseWriter, r *ht
 			return
 		}
 
+		// Create tts service
+		tts, err := texttospeech.ParseTTSConfig(joinReq.Config.TTSConfig)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		// Create llm service
+		llm, err := llm.ParseLLMConfig(joinReq.Config.LLMConfig)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
 		discordClient := *dependencies.DiscordClient
 
 		// Setup voice connection
@@ -175,20 +189,6 @@ func JoinVoiceChannel(dependencies *deps.Deps) func(w http.ResponseWriter, r *ht
 
 		playAudioChannel := make(chan []byte)
 
-		// Create tts service
-		tts, err := texttospeech.ParseTTSConfig(joinReq.Config.TTSConfig)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		// Create llm service
-		llm, err := llm.ParseLLMConfig(joinReq.Config.LLMConfig)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-
 		responderArgs := responder.NewResponderArgs{
 			BotName:                joinReq.Config.BotName,
 			PlayAudioChannel:       playAudioChannel,
@@ -209,11 +209,7 @@ func JoinVoiceChannel(dependencies *deps.Deps) func(w http.ResponseWriter, r *ht
 
 		transcriber := speechtotext.NewTranscriber(joinReq.Config.BotName, joinReq.Config.TranscriberConfig, responder)
 
-		// Create redis client
-
 		Speakers := make(map[snowflake.ID]*discord.Speaker)
-
-		// Create responder
 
 		// Create call
 		newCall := &Call{

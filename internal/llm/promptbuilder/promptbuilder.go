@@ -12,7 +12,7 @@ import (
 type PromptContents struct {
 	Personality string `validate:"required"`
 	ToolList    []tools.Tool
-	Cache       []CacheItem
+	Documents   []Document
 	Tasks       []Task
 }
 
@@ -21,12 +21,12 @@ type PromptBuilder struct {
 	transcript  string
 	personality string
 	toolList    string
-	cache       string
+	documents   string
 	taskList    string
 	sections    []string
 }
 
-type CacheItem struct {
+type Document struct {
 	Name    string `validate:"required"`
 	Content string `validate:"required"`
 }
@@ -38,19 +38,19 @@ type Task struct {
 }
 
 // NewPromptBuilder creates a new PromptBuilder with default values
-func NewPromptBuilder(botName, transcript, personality string, toolList []tools.Tool, cache []CacheItem, taskList []Task) *PromptBuilder {
-	var cacheString string
+func NewPromptBuilder(botName, transcript, personality string, toolList []tools.Tool, documents []Document, taskList []Task) *PromptBuilder {
+	var docString string
 
-	if len(cache) > 0 {
-		cacheJson, err := json.Marshal(cache)
+	if len(documents) > 0 {
+		docJson, err := json.Marshal(documents)
 		if err != nil {
-			fmt.Printf("Error marshalling cache: %s", err)
-			cacheString = "[Error marshalling cache]"
+			fmt.Printf("Error marshalling documents: %s", err)
+			docString = "[Error marshalling documents]"
 		} else {
-			cacheString = string(cacheJson)
+			docString = string(docJson)
 		}
 	} else {
-		cacheString = "[Nothing in cache]"
+		docString = "[No documents]"
 	}
 
 	var toolListString string
@@ -84,7 +84,7 @@ func NewPromptBuilder(botName, transcript, personality string, toolList []tools.
 		transcript:  transcript,
 		personality: personality,
 		toolList:    toolListString,
-		cache:       cacheString,
+		documents:   docString,
 		taskList:    taskListString,
 	}
 }
@@ -114,16 +114,15 @@ func (pb *PromptBuilder) AddTools() *PromptBuilder {
 }
 
 // AddCache adds the cache section to the prompt
-func (pb *PromptBuilder) AddCache() *PromptBuilder {
-	cacheIntro := "Below is a list of cached items. Each cached item is represented by a unique identifier (ID) and has two properties: `Name`: The name of the item, which may indicate if it is a response from a tool, a task, or a piece of context to consider. `Content`: the actual content of the cache item. You should always consider the information and pending items in the cache when formulating your responses."
-	cacheContent := fmt.Sprintf("\n\nCache:\n%s", pb.cache)
-	pb.sections = append(pb.sections, cacheIntro, cacheContent)
+func (pb *PromptBuilder) AddDocs() *PromptBuilder {
+	documents := fmt.Sprintf("\n\nDocuments:\n%s", pb.documents)
+	pb.sections = append(pb.sections, documents)
 	return pb
 }
 
 // AddTasks adds the tasks section to the prompt
 func (pb *PromptBuilder) AddTasks() *PromptBuilder {
-	taskPrimer := "Below is a list of pending tasks. Each task is represented by its `Name`, `Description`, and `DeliverableGuide`. The `Description` details the task at hand, and the `DeliverableGuide` provides guidance on what constitutes successful completion of the task, such as the use of a specific tool or relaying particular information to someone in the call. Your responses should always consider these tasks, and you should make every effort to complete them when appropriate. Here's an example:\n\nName: Inform about weather\nDescription: Share the current weather conditions with the group using the Weather Tool.\nDeliverableGuide: Share the output of the Weather tool with the group.\n\nTo confirm that a task has been completed, use the MarkTaskDone tool. This tool uses the same format as the other tools and takes the task name as input. Here's an example of how to mark a task as done:\n\n[15:03:20] " + pb.botName + ": The current weather is sunny.\n|[{ \"name\": \"MarkTaskDone\", \"input\": \"Inform about weather\" }].\n\nRemember to enter a new line and write a '|' before writing your tool message."
+	taskPrimer := "Below is a list of pending tasks. Each task is represented by its `Name`, `Description`, and `DeliverableGuide`. The `Description` details the task at hand, and the `DeliverableGuide` provides guidance on what constitutes successful completion of the task, such as the use of a specific tool or relaying particular information to someone in the call. Your responses should always consider these tasks, and you should make every effort to complete them when appropriate. Here's an example:\n\nName: Inform about weather\nDescription: Share the current weather conditions with the group using the Weather Tool.\nDeliverableGuide: Share the output of the Weather tool with the group."
 
 	taskList := "Task List:\n" + pb.taskList + "\n"
 
