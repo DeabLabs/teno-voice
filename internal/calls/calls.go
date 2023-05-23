@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"reflect"
 	"sync"
 	"time"
 
@@ -38,54 +39,14 @@ type ValidatedJoinRequest struct {
 }
 
 type Config struct {
-	BotName           string                         `validate:"required"`
-	PromptContents    promptbuilder.PromptContents   `validate:"required"`
-	VoiceUXConfig     responder.VoiceUXConfig        `validate:"required"`
-	LLMConfig         llm.LLMConfigPayload           `validate:"required,LLMConfigValidation"`
-	TTSConfig         texttospeech.TTSConfigPayload  `validate:"required,TTSConfigValidation"`
-	TranscriptConfig  transcript.TranscriptConfig    `validate:"required"`
-	TranscriberConfig speechtotext.TranscriberConfig `validate:"required"`
+	BotName           string                          `validate:"required"`
+	PromptContents    *promptbuilder.PromptContents   `validate:"required"`
+	VoiceUXConfig     *responder.VoiceUXConfig        `validate:"required"`
+	LLMConfig         *llm.LLMConfigPayload           `validate:"required,LLMConfigValidation"`
+	TTSConfig         *texttospeech.TTSConfigPayload  `validate:"required,TTSConfigValidation"`
+	TranscriptConfig  *transcript.TranscriptConfig    `validate:"required"`
+	TranscriberConfig *speechtotext.TranscriberConfig `validate:"required"`
 }
-
-// func (jr *JoinRequest) validateAndParse() (ValidatedJoinRequest, error) {
-// 	guildID, err := snowflake.Parse(jr.GuildID)
-// 	if err != nil {
-// 		return ValidatedJoinRequest{}, fmt.Errorf("error parsing guildID: %s", err.Error())
-// 	}
-
-// 	channelID, err := snowflake.Parse(jr.ChannelID)
-// 	if err != nil {
-// 		return ValidatedJoinRequest{}, fmt.Errorf("error parsing channelID: %s", err.Error())
-// 	}
-
-// 	return ValidatedJoinRequest{
-// 		GuildID:            guildID,
-// 		ChannelID:          channelID,
-// 		RedisTranscriptKey: jr.RedisTranscriptKey,
-// 		ResponderConfig:    jr.ResponderConfig,
-// 	}, nil
-// }
-
-// func decodeAndValidateRequest(w http.ResponseWriter, r *http.Request) (ValidatedJoinRequest, responder.ResponderConfig, error) {
-// 	var jr JoinRequest
-
-// 	err := helpers.DecodeJSONBody(w, r, &jr)
-// 	if err != nil {
-// 		var mr *helpers.MalformedRequest
-// 		if errors.As(err, &mr) {
-// 			return ValidatedJoinRequest{}, responder.ResponderConfig{}, fmt.Errorf(mr.Msg)
-// 		} else {
-// 			return ValidatedJoinRequest{}, responder.ResponderConfig{}, fmt.Errorf(http.StatusText(http.StatusInternalServerError)+": %s", err.Error())
-// 		}
-// 	}
-
-// 	validatedRequest, err := jr.validateAndParse()
-// 	if err != nil {
-// 		return ValidatedJoinRequest{}, responder.ResponderConfig{}, err
-// 	}
-
-// 	return validatedRequest, jr.ResponderConfig, nil
-// }
 
 type LeaveRequest struct {
 	GuildID string
@@ -97,6 +58,7 @@ type Call struct {
 	transcriptSSEChan   chan string
 	toolMessagesSSEChan chan string
 	responder           *responder.Responder
+	transcriber         *speechtotext.Transcriber
 }
 
 var callsMutex sync.Mutex
@@ -145,14 +107,14 @@ func JoinVoiceChannel(dependencies *deps.Deps) func(w http.ResponseWriter, r *ht
 		}
 
 		// Create tts service
-		tts, err := texttospeech.ParseTTSConfig(joinReq.Config.TTSConfig)
+		tts, err := texttospeech.ParseTTSConfig(*joinReq.Config.TTSConfig)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 
 		// Create llm service
-		llm, err := llm.ParseLLMConfig(joinReq.Config.LLMConfig)
+		llm, err := llm.ParseLLMConfig(*joinReq.Config.LLMConfig)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -195,19 +157,19 @@ func JoinVoiceChannel(dependencies *deps.Deps) func(w http.ResponseWriter, r *ht
 			Conn:                   &conn,
 			TTSService:             &tts,
 			LLMService:             &llm,
-			VoiceUXConfig:          joinReq.Config.VoiceUXConfig,
-			PromptContents:         &joinReq.Config.PromptContents,
+			VoiceUXConfig:          *joinReq.Config.VoiceUXConfig,
+			PromptContents:         joinReq.Config.PromptContents,
 			TranscriptSSEChannel:   transcriptSSEChannel,
 			ToolMessagesSSEChannel: toolMessagesSSEChannel,
 			RedisClient:            &redisClient,
 			RedisTranscriptKey:     joinReq.RedisTranscriptKey,
-			TranscriptConfig:       joinReq.Config.TranscriptConfig,
+			TranscriptConfig:       *joinReq.Config.TranscriptConfig,
 			BotId:                  discordClient.ID(),
 		}
 
 		responder := responder.NewResponder(responderArgs)
 
-		transcriber := speechtotext.NewTranscriber(joinReq.Config.BotName, joinReq.Config.TranscriberConfig, responder)
+		transcriber := speechtotext.NewTranscriber(joinReq.Config.BotName, *joinReq.Config.TranscriberConfig, responder)
 
 		Speakers := make(map[snowflake.ID]*discord.Speaker)
 
@@ -218,6 +180,7 @@ func JoinVoiceChannel(dependencies *deps.Deps) func(w http.ResponseWriter, r *ht
 			transcriptSSEChan:   transcriptSSEChannel,
 			toolMessagesSSEChan: toolMessagesSSEChannel,
 			responder:           responder,
+			transcriber:         transcriber,
 		}
 
 		// Store the call in the map.
@@ -251,100 +214,7 @@ func JoinVoiceChannel(dependencies *deps.Deps) func(w http.ResponseWriter, r *ht
 	}
 }
 
-// func JoinVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
-// 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-// 		joinCtx := r.Context()
-// 		joinCtx, cancel := context.WithTimeout(joinCtx, time.Second*5)
-// 		defer cancel()
-
-// 		joinParams, responderConfig, err := decodeAndValidateRequest(w, r)
-
-// 		if err != nil {
-// 			w.Write([]byte(fmt.Sprintf("Could not join voice call: %s", err.Error())))
-// 			return
-// 		}
-
-// 		discordClient := *dependencies.DiscordClient
-
-// 		// Setup voice connection
-// 		conn, err := discord.SetupVoiceConnection(joinCtx, &discordClient, joinParams.GuildID, joinParams.ChannelID)
-
-// 		if err != nil {
-// 			w.Write([]byte(fmt.Sprintf("Could not join voice call: %s", err.Error())))
-// 			return
-// 		}
-
-// 		if err := conn.SetSpeaking(joinCtx, voice.SpeakingFlagMicrophone); err != nil {
-// 			panic("error setting speaking flag: " + err.Error())
-// 		}
-
-// 		if _, err := conn.UDP().Write(voice.SilenceAudioFrame); err != nil {
-// 			panic("error sending silence: " + err.Error())
-// 		}
-
-// 		// Create a channel to wait for a signal to close the connection.
-// 		closeSignal := make(chan struct{})
-
-// 		// Make sse channel for live transcript updates
-// 		transcriptSSEChannel := make(chan string)
-
-// 		// Make sse channel for tool messages
-// 		toolMessagesSSEChannel := make(chan string)
-
-// 		// Create tts service
-// 		TTS, err := texttospeech.ParseTTSConfig(responderConfig.TextToSpeechConfig)
-
-// 		// Create redis client
-// 		redisClient := *dependencies.RedisClient
-
-// 		Speakers := make(map[snowflake.ID]*discord.Speaker)
-
-// 		playAudioChannel := make(chan []byte)
-
-// 		// Create responder
-// 		responder := responder.NewResponder(playAudioChannel, &conn, azureTTS, responderConfig, transcriptSSEChannel, toolMessagesSSEChannel, &redisClient, joinParams.RedisTranscriptKey, discordClient.ID())
-
-// 		// Create call
-// 		newCall := &Call{
-// 			connection:          &conn,
-// 			closeSignalChan:     closeSignal,
-// 			transcriptSSEChan:   transcriptSSEChannel,
-// 			toolMessagesSSEChan: toolMessagesSSEChannel,
-// 			responder:           responder,
-// 		}
-
-// 		// Store the call in the map.
-// 		callsMutex.Lock()
-// 		calls[joinParams.GuildID] = newCall
-// 		callsMutex.Unlock()
-
-// 		ongoingCtx, cancel := context.WithCancel(context.Background())
-
-// 		go discord.WriteToVoiceConnection(ongoingCtx, &conn, playAudioChannel)
-
-// 		newSpeakerMutex := sync.Mutex{}
-// 		go discord.HandleIncomingPackets(ongoingCtx, &discordClient, &conn, Speakers, &newSpeakerMutex, responder)
-
-// 		go func() {
-// 			<-closeSignal
-// 			leaveCtx, leaveCancel := context.WithTimeout(context.Background(), time.Second*10)
-// 			defer leaveCancel()
-// 			conn.Close(leaveCtx)
-
-// 			// Clean up the call from the calls map.
-// 			callsMutex.Lock()
-// 			delete(calls, joinParams.GuildID)
-// 			callsMutex.Unlock()
-
-// 			// Cancel the context.
-// 			cancel()
-// 		}()
-
-// 		w.Write([]byte("Joined voice call"))
-// 	})
-// }
-
-func LeaveVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
+func LeaveVoiceChannel(dependencies *deps.Deps) http.HandlerFunc {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("LeaveVoiceCall called")
 
@@ -384,6 +254,101 @@ func LeaveVoiceCall(dependencies *deps.Deps) http.HandlerFunc {
 
 		w.Write([]byte("Left voice call"))
 	})
+}
+
+func UpdateConfig(dependencies *deps.Deps) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var config Config
+
+		// Create a new validator instance
+		validate := dependencies.Validate
+
+		// Validate the struct
+
+		guildIDStr := chi.URLParam(r, "guild_id")
+
+		guildID, err := snowflake.Parse(guildIDStr)
+		if err != nil {
+			http.Error(w, "Invalid guild ID", http.StatusBadRequest)
+			return
+		}
+
+		// Get the call for the given guildID
+		call, ok := calls[guildID]
+		if !ok {
+			http.Error(w, "Call not found", http.StatusNotFound)
+			return
+		}
+
+		err = helpers.DecodeJSONBody(w, r, &config)
+		if err != nil {
+			var mr *helpers.MalformedRequest
+			if errors.As(err, &mr) {
+				http.Error(w, mr.Msg, mr.Status)
+			} else {
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
+			return
+		}
+
+		if config.BotName != "" {
+			call.transcriber.BotName = config.BotName
+			call.responder.BotName = config.BotName
+		}
+
+		if config.TranscriberConfig != nil && !reflect.DeepEqual(call.transcriber.Config, config.TranscriberConfig) {
+			if err := validate.Struct(&config.TranscriberConfig); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			call.transcriber.Config = *config.TranscriberConfig
+		}
+
+		if config.VoiceUXConfig != nil && !reflect.DeepEqual(call.responder.VoiceUXConfig, config.VoiceUXConfig) {
+			if err := validate.Struct(&config.VoiceUXConfig); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			call.responder.VoiceUXConfig = *config.VoiceUXConfig
+		}
+
+		if config.PromptContents != nil && !reflect.DeepEqual(call.responder.PromptContents, config.PromptContents) {
+			if err := validate.Struct(&config.PromptContents); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+
+			call.responder.PromptContents = *config.PromptContents
+		}
+
+		if config.TranscriptConfig != nil && !reflect.DeepEqual(call.responder.Transcript.Config, config.TranscriptConfig) {
+			if err := validate.Struct(&config.TranscriptConfig); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			call.responder.Transcript.Config = *config.TranscriptConfig
+		}
+
+		if config.TTSConfig != nil {
+			tts, err := texttospeech.ParseTTSConfig(*config.TTSConfig)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+			}
+			call.responder.TtsService = tts
+
+		}
+
+		if config.LLMConfig != nil {
+			llm, err := llm.ParseLLMConfig(*config.LLMConfig)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+			}
+
+			call.responder.LlmService = llm
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}
 }
 
 func TranscriptSSEHandler(dependencies *deps.Deps) http.HandlerFunc {
@@ -485,75 +450,3 @@ func ToolMessagesSSEHandler(dependencies *deps.Deps) http.HandlerFunc {
 		}
 	})
 }
-
-// func ConfigResponder(dependencies *deps.Deps) http.HandlerFunc {
-// 	return func(w http.ResponseWriter, r *http.Request) {
-// 		guildIDStr := chi.URLParam(r, "guild_id")
-
-// 		guildID, err := snowflake.Parse(guildIDStr)
-// 		if err != nil {
-// 			http.Error(w, "Invalid guild ID", http.StatusBadRequest)
-// 			return
-// 		}
-
-// 		// Get the call for the given guildID
-// 		call, ok := calls[guildID]
-// 		if !ok {
-// 			http.Error(w, "Call not found", http.StatusNotFound)
-// 			return
-// 		}
-
-// 		var config responder.ResponderConfig
-// 		err = helpers.DecodeJSONBody(w, r, &config)
-// 		if err != nil {
-// 			var mr *helpers.MalformedRequest
-// 			if errors.As(err, &mr) {
-// 				http.Error(w, mr.Msg, mr.Status)
-// 			} else {
-// 				http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
-// 			}
-// 			return
-// 		}
-
-// 		err = call.responder.Configure(config)
-// 		if err != nil {
-// 			http.Error(w, err.Error(), http.StatusInternalServerError)
-// 			return
-// 		}
-
-// 		w.WriteHeader(http.StatusOK)
-// 	}
-// }
-
-// func PushToCache(dependencies *deps.Deps) http.HandlerFunc {
-// 	return func(w http.ResponseWriter, r *http.Request) {
-// 		guildIDStr := chi.URLParam(r, "guild_id")
-
-// 		guildID, err := snowflake.Parse(guildIDStr)
-// 		if err != nil {
-// 			http.Error(w, "Invalid guild ID", http.StatusBadRequest)
-// 			return
-// 		}
-
-// 		// Get the call for the given guildID
-// 		call, ok := calls[guildID]
-// 		if !ok {
-// 			http.Error(w, "Call not found", http.StatusNotFound)
-// 			return
-// 		}
-
-// 		var cacheItem cache.CacheItem
-// 		err = helpers.DecodeJSONBody(w, r, &cacheItem)
-// 		if err != nil {
-// 			var mr *helpers.MalformedRequest
-// 			if errors.As(err, &mr) {
-// 				http.Error(w, mr.Msg, mr.Status)
-// 			} else {
-// 				http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
-// 			}
-// 			return
-// 		}
-
-// 		call.responder.GetCache().AddOrUpdateItem(cacheItem)
-// 	}
-// }

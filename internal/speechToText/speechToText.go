@@ -40,14 +40,6 @@ func NewTranscriber(botName string, config TranscriberConfig, responder *respond
 	}
 }
 
-func (t *Transcriber) UpdateConfig(config TranscriberConfig) {
-	t.Config = config
-	t.IgnoredUsersMap = make(map[string]struct{})
-	for _, ignoredUser := range config.IgnoredUsers {
-		t.IgnoredUsersMap[ignoredUser] = struct{}{}
-	}
-}
-
 // deepgram s2t sdk
 func (t *Transcriber) NewStream(ctx context.Context, onClose func(), username string, userId string) (*websocket.Conn, error) {
 	// Split botname into words

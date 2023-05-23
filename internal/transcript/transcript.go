@@ -18,7 +18,7 @@ type Transcript struct {
 	transcriptSSEChannel chan string
 	redisClient          redis.Client
 	transcriptKey        string
-	config               TranscriptConfig
+	Config               TranscriptConfig
 	mu                   sync.Mutex
 }
 
@@ -39,7 +39,7 @@ func NewTranscript(transcriptSSEChannel chan string, redisClient *redis.Client, 
 		transcriptSSEChannel: transcriptSSEChannel,
 		redisClient:          *redisClient,
 		transcriptKey:        transcriptKey,
-		config:               config,
+		Config:               config,
 	}
 }
 
@@ -48,23 +48,10 @@ func (t *Transcript) addLine(formattedText string) {
 	defer t.mu.Unlock()
 
 	// If the slice has reached the max limit from config, remove the oldest element before appending.
-	if len(t.lines) >= t.config.NumberOfTranscriptLines {
+	if len(t.lines) >= t.Config.NumberOfTranscriptLines {
 		t.lines = t.lines[1:]
 	}
 	t.lines = append(t.lines, formattedText)
-}
-
-func (t *Transcript) UpdateConfig(config TranscriptConfig) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	// Check if we need to trim lines.
-	if config.NumberOfTranscriptLines < len(t.lines) {
-		// Trim from the beginning.
-		t.lines = t.lines[len(t.lines)-config.NumberOfTranscriptLines:]
-	}
-	// Update the config.
-	t.config = config
 }
 
 func (t *Transcript) AddSpokenLine(line *Line) error {

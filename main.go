@@ -59,13 +59,11 @@ func main() {
 	// Accepts join request and joins the voice channel
 	router.Post("/join", calls.JoinVoiceChannel(dependencies))
 	// Accepts leave request and leaves the voice channel
-	//router.Post("/leave", calls.LeaveVoiceCall(dependencies))
+	router.Post("/leave", calls.LeaveVoiceChannel(dependencies))
 	// Accepts a Config object and sets the responder config
-	//router.Post("/{guild_id}/config", calls.ConfigResponder(dependencies))
+	router.Post("/{guild_id}/config", calls.UpdateConfig(dependencies))
 	// Subscribes to the transcript SSE stream, which sends lines of the transcript as strings when new lines are available
-	//router.Get("/{guild_id}/transcript", calls.TranscriptSSEHandler(dependencies))
-	// Accepts a cache item, and adds it to the cache or updates the existing item of the same name
-	//router.Post("/{guild_id}/tool-messages", calls.PushToCache(dependencies))
+	router.Get("/{guild_id}/transcript", calls.TranscriptSSEHandler(dependencies))
 	// Subscribes to the tool messages SSE stream, which sends tool messages as strings when the responder sends them
 	router.Get("/{guild_id}/tool-messages", calls.ToolMessagesSSEHandler(dependencies))
 

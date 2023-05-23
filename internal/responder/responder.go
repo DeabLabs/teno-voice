@@ -8,6 +8,7 @@ import (
 	"log"
 	"math"
 	"net"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -48,12 +49,12 @@ type NewResponderArgs struct {
 }
 
 type Responder struct {
-	botName                string
-	transcript             *transcript.Transcript
+	BotName                string
+	Transcript             *transcript.Transcript
 	playAudioChannel       chan []byte
 	conn                   voice.Conn
-	ttsService             texttospeech.TextToSpeechService
-	llmService             llm.LLMService
+	TtsService             texttospeech.TextToSpeechService
+	LlmService             llm.LLMService
 	cancelResponse         context.CancelFunc
 	awake                  bool
 	linesSinceLastResponse int
@@ -72,12 +73,12 @@ type audioStreamWithIndex struct {
 
 func NewResponder(args NewResponderArgs) *Responder {
 	responder := &Responder{
-		botName:                args.BotName,
+		BotName:                args.BotName,
 		playAudioChannel:       args.PlayAudioChannel,
 		conn:                   *args.Conn,
-		transcript:             transcript.NewTranscript(args.TranscriptSSEChannel, args.RedisClient, args.RedisTranscriptKey, args.TranscriptConfig),
-		ttsService:             *args.TTSService,
-		llmService:             *args.LLMService,
+		Transcript:             transcript.NewTranscript(args.TranscriptSSEChannel, args.RedisClient, args.RedisTranscriptKey, args.TranscriptConfig),
+		TtsService:             *args.TTSService,
+		LlmService:             *args.LLMService,
 		VoiceUXConfig:          args.VoiceUXConfig,
 		PromptContents:         *args.PromptContents,
 		cancelResponse:         nil,
@@ -91,6 +92,20 @@ func NewResponder(args NewResponderArgs) *Responder {
 	return responder
 }
 
+func (r *Responder) UpdateConfig(newVoiceUxConfig VoiceUXConfig, newPromptContents promptbuilder.PromptContents) {
+	if reflect.DeepEqual(r.VoiceUXConfig, newVoiceUxConfig) {
+		return
+	} else {
+		r.VoiceUXConfig = newVoiceUxConfig
+	}
+
+	if reflect.DeepEqual(r.PromptContents, newPromptContents) {
+		return
+	} else {
+		r.PromptContents = newPromptContents
+	}
+}
+
 func (r *Responder) Respond(receivedTranscriptionTime time.Time) context.CancelFunc {
 	ctx, cancelFunc := context.WithCancel(context.Background())
 	sentenceChan := make(chan string)
@@ -100,7 +115,7 @@ func (r *Responder) Respond(receivedTranscriptionTime time.Time) context.CancelF
 	toolMessageChan := make(chan string, 1)
 
 	// Get recent lines of the transcript
-	lines := r.transcript.GetTranscript()
+	lines := r.Transcript.GetTranscript()
 
 	wg := sync.WaitGroup{}
 
@@ -150,7 +165,7 @@ func (r *Responder) Respond(receivedTranscriptionTime time.Time) context.CancelF
 
 func (r *Responder) getTokenStream(ctx context.Context, lines string, sentenceChan chan string, toolMessageChan chan string) {
 	// Create the chat completion stream
-	stream, usageEvent, err := r.llmService.GetTranscriptResponseStream(lines, r.botName, &r.PromptContents)
+	stream, usageEvent, err := r.LlmService.GetTranscriptResponseStream(lines, r.BotName, &r.PromptContents)
 	if err != nil {
 		fmt.Printf("Token stream error: %v\n", err)
 		return
@@ -240,7 +255,7 @@ func (r *Responder) getTokenStream(ctx context.Context, lines string, sentenceCh
 		log.Printf("Tool message: %v\n", toolMessage)
 		if tools.IsValidToolMessage(toolMessage, r.PromptContents.ToolList) {
 			toolMessageChan <- toolMessage
-			r.transcript.AddToolMessageLine(toolMessage)
+			r.Transcript.AddToolMessageLine(toolMessage)
 		} else {
 			fmt.Printf("Invalid tool message: %v\n", toolMessage)
 		}
@@ -262,7 +277,7 @@ func (r *Responder) synthesizeSentences(ctx context.Context, sentenceChan chan s
 			return
 		default:
 		}
-		opusPackets, err := r.ttsService.Synthesize(sentence)
+		opusPackets, err := r.TtsService.Synthesize(sentence)
 		if err != nil {
 			fmt.Printf("Error generating speech: %v\n", err)
 			continue
@@ -357,7 +372,7 @@ func (r *Responder) NewTranscription(line string, botNameSpoken float64, usernam
 		Time:     time.Now(),
 	}
 
-	r.transcript.AddSpokenLine(newLine)
+	r.Transcript.AddSpokenLine(newLine)
 	r.linesSinceLastResponse++
 
 	if r.cancelResponse != nil {
@@ -387,7 +402,7 @@ func (r *Responder) NewTranscription(line string, botNameSpoken float64, usernam
 	// Only respond if the bot is awake
 	if r.awake {
 		if r.isSpeaking {
-			r.transcript.AddInterruptionLine(username, r.botName)
+			r.Transcript.AddInterruptionLine(username, r.BotName)
 		}
 		r.cancelResponse = r.Respond(receivedTranscriptionTime)
 	}
@@ -396,11 +411,11 @@ func (r *Responder) NewTranscription(line string, botNameSpoken float64, usernam
 func (r *Responder) botLineSpoken(line string) {
 	newLine := &transcript.Line{
 		Text:     line,
-		Username: r.botName,
+		Username: r.BotName,
 		UserId:   r.botId.String(),
 		Time:     time.Now(),
 	}
-	r.transcript.AddSpokenLine(newLine)
+	r.Transcript.AddSpokenLine(newLine)
 
 	// Reset the counter when the bot speaks
 	r.linesSinceLastResponse = 0
