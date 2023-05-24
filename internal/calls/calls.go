@@ -261,8 +261,6 @@ func UpdateConfig(dependencies *deps.Deps) func(w http.ResponseWriter, r *http.R
 		// Create a new validator instance
 		validate := dependencies.Validate
 
-		// Validate the struct
-
 		callId := chi.URLParam(r, "bot_id") + "-" + chi.URLParam(r, "guild_id")
 
 		// Get the call for the given guildID
@@ -283,29 +281,31 @@ func UpdateConfig(dependencies *deps.Deps) func(w http.ResponseWriter, r *http.R
 			return
 		}
 
+		log.Printf("Transcriber Config: %+v", config.TranscriberConfig)
+
 		if config.BotName != "" {
 			call.transcriber.BotName = config.BotName
 			call.responder.BotName = config.BotName
 		}
 
-		if config.TranscriberConfig != nil && !reflect.DeepEqual(call.transcriber.Config, config.TranscriberConfig) {
-			if err := validate.Struct(&config.TranscriberConfig); err != nil {
+		if config.TranscriberConfig != nil && !reflect.DeepEqual(call.transcriber.Config, *config.TranscriberConfig) {
+			if err := validate.Struct(config.TranscriberConfig); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
 			call.transcriber.Config = *config.TranscriberConfig
 		}
 
-		if config.VoiceUXConfig != nil && !reflect.DeepEqual(call.responder.VoiceUXConfig, config.VoiceUXConfig) {
-			if err := validate.Struct(&config.VoiceUXConfig); err != nil {
+		if config.VoiceUXConfig != nil && !reflect.DeepEqual(call.responder.VoiceUXConfig, *config.VoiceUXConfig) {
+			if err := validate.Struct(config.VoiceUXConfig); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
 			call.responder.VoiceUXConfig = *config.VoiceUXConfig
 		}
 
-		if config.PromptContents != nil && !reflect.DeepEqual(call.responder.PromptContents, config.PromptContents) {
-			if err := validate.Struct(&config.PromptContents); err != nil {
+		if config.PromptContents != nil && !reflect.DeepEqual(call.responder.PromptContents, *config.PromptContents) {
+			if err := validate.Struct(config.PromptContents); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
@@ -313,8 +313,8 @@ func UpdateConfig(dependencies *deps.Deps) func(w http.ResponseWriter, r *http.R
 			call.responder.PromptContents = *config.PromptContents
 		}
 
-		if config.TranscriptConfig != nil && !reflect.DeepEqual(call.responder.Transcript.Config, config.TranscriptConfig) {
-			if err := validate.Struct(&config.TranscriptConfig); err != nil {
+		if config.TranscriptConfig != nil && !reflect.DeepEqual(call.responder.Transcript.Config, *config.TranscriptConfig) {
+			if err := validate.Struct(config.TranscriptConfig); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
