@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
-	"reflect"
 	"sync"
 	"time"
 
@@ -231,7 +229,6 @@ func JoinVoiceChannel(dependencies *deps.Deps) func(w http.ResponseWriter, r *ht
 
 func LeaveVoiceChannel(dependencies *deps.Deps) http.HandlerFunc {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("LeaveVoiceCall called")
 
 		callId := chi.URLParam(r, "bot_id") + "-" + chi.URLParam(r, "guild_id")
 
@@ -281,22 +278,21 @@ func UpdateConfig(dependencies *deps.Deps) func(w http.ResponseWriter, r *http.R
 			return
 		}
 
-		log.Printf("Transcriber Config: %+v", config.TranscriberConfig)
-
 		if config.BotName != "" {
 			call.transcriber.BotName = config.BotName
 			call.responder.BotName = config.BotName
 		}
 
-		if config.TranscriberConfig != nil && !reflect.DeepEqual(call.transcriber.Config, *config.TranscriberConfig) {
+		if config.TranscriberConfig != nil {
 			if err := validate.Struct(config.TranscriberConfig); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
 			call.transcriber.Config = *config.TranscriberConfig
+
 		}
 
-		if config.VoiceUXConfig != nil && !reflect.DeepEqual(call.responder.VoiceUXConfig, *config.VoiceUXConfig) {
+		if config.VoiceUXConfig != nil {
 			if err := validate.Struct(config.VoiceUXConfig); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
@@ -304,7 +300,7 @@ func UpdateConfig(dependencies *deps.Deps) func(w http.ResponseWriter, r *http.R
 			call.responder.VoiceUXConfig = *config.VoiceUXConfig
 		}
 
-		if config.PromptContents != nil && !reflect.DeepEqual(call.responder.PromptContents, *config.PromptContents) {
+		if config.PromptContents != nil {
 			if err := validate.Struct(config.PromptContents); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
@@ -313,7 +309,7 @@ func UpdateConfig(dependencies *deps.Deps) func(w http.ResponseWriter, r *http.R
 			call.responder.PromptContents = *config.PromptContents
 		}
 
-		if config.TranscriptConfig != nil && !reflect.DeepEqual(call.responder.Transcript.Config, *config.TranscriptConfig) {
+		if config.TranscriptConfig != nil {
 			if err := validate.Struct(config.TranscriptConfig); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return

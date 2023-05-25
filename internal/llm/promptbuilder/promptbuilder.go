@@ -11,7 +11,7 @@ import (
 
 type PromptContents struct {
 	Personality string `validate:"required"`
-	ToolList    []tools.Tool
+	Tools       []tools.Tool
 	Documents   []Document
 	Tasks       []Task
 }
@@ -20,9 +20,9 @@ type PromptBuilder struct {
 	botName     string
 	transcript  string
 	personality string
-	toolList    string
+	tools       string
 	documents   string
-	taskList    string
+	tasks       string
 	sections    []string
 }
 
@@ -38,7 +38,7 @@ type Task struct {
 }
 
 // NewPromptBuilder creates a new PromptBuilder with default values
-func NewPromptBuilder(botName, transcript, personality string, toolList []tools.Tool, documents []Document, taskList []Task) *PromptBuilder {
+func NewPromptBuilder(botName, transcript, personality string, tools []tools.Tool, documents []Document, tasks []Task) *PromptBuilder {
 	var docString string
 
 	if len(documents) > 0 {
@@ -53,39 +53,39 @@ func NewPromptBuilder(botName, transcript, personality string, toolList []tools.
 		docString = "[No documents]"
 	}
 
-	var toolListString string
-	if len(toolList) > 0 {
-		toolListJson, err := json.Marshal(toolList)
+	var toolsString string
+	if len(tools) > 0 {
+		toolListJson, err := json.Marshal(tools)
 		if err != nil {
 			fmt.Printf("Error marshalling tool list: %s", err)
-			toolListString = "[Error marshalling tool list]"
+			toolsString = "[Error marshalling tool list]"
 		} else {
-			toolListString = string(toolListJson)
+			toolsString = string(toolListJson)
 		}
 	} else {
-		toolListString = "[No additional tools available]"
+		toolsString = "[No additional tools available]"
 	}
 
-	var taskListString string
-	if len(taskList) > 0 {
-		taskListJson, err := json.Marshal(taskList)
+	var tasksString string
+	if len(tasks) > 0 {
+		taskListJson, err := json.Marshal(tasks)
 		if err != nil {
 			fmt.Printf("Error marshalling task list: %s", err)
-			taskListString = "[Error marshalling task list]"
+			tasksString = "[Error marshalling task list]"
 		} else {
-			taskListString = string(taskListJson)
+			tasksString = string(taskListJson)
 		}
 	} else {
-		taskListString = "[No pending tasks]"
+		tasksString = "[No pending tasks]"
 	}
 
 	return &PromptBuilder{
 		botName:     botName,
 		transcript:  transcript,
 		personality: personality,
-		toolList:    toolListString,
+		tools:       toolsString,
 		documents:   docString,
-		taskList:    taskListString,
+		tasks:       tasksString,
 	}
 }
 
@@ -107,9 +107,9 @@ func (pb *PromptBuilder) AddTranscript() *PromptBuilder {
 func (pb *PromptBuilder) AddTools() *PromptBuilder {
 	toolPrimer := fmt.Sprintf("Below is a list of available tools you can use. Each tool has four attributes: `Name`: the tool's identifier, `Description`: explains the tool's purpose and when to use it, `Input Guide`: advises on how to format the input string, `Output Guide`: describes the tool's return value, if any. To use a tool, compose a response with two parts: a spoken response and tool usage instructions, separated by a newline and a pipe ('|'). The spoken response is a string of text to be read aloud via TTS. The tool usage instructions are on the next line, starting with a '|', in the form of a JSON array. Each array element is a JSON object representing a tool to be used, with two properties: `name` and `input`. You shouldn't explain to the other voice call members how you use the tools unless someone asks. Here's an example of a response that uses a tool:\n\n[01:48:40] %s: This text before the pipe will be played in the voice channel like normal.\n|[{ \"name\": \"Tool1\", \"input\": \"This input will be sent to tool 1\" }, { \"name\": \"Tool2\", \"input\": \"This input will be sent to tool 2\" }].\n\nRemember to enter a new line and write a '|' before writing your tool message. Review the `description`, `input guide`, and `output guide` of each tool carefully to use them effectively.", pb.botName)
 
-	toolList := "Tool List:\n" + pb.toolList + "\n"
+	tools := "Tool List:\n" + pb.tools + "\n"
 
-	pb.sections = append(pb.sections, toolPrimer, toolList)
+	pb.sections = append(pb.sections, toolPrimer, tools)
 	return pb
 }
 
@@ -124,9 +124,9 @@ func (pb *PromptBuilder) AddDocs() *PromptBuilder {
 func (pb *PromptBuilder) AddTasks() *PromptBuilder {
 	taskPrimer := "Below is a list of pending tasks. Each task is represented by its `Name`, `Description`, and `DeliverableGuide`. The `Description` details the task at hand, and the `DeliverableGuide` provides guidance on what constitutes successful completion of the task, such as the use of a specific tool or relaying particular information to someone in the call. Your responses should always consider these tasks, and you should make every effort to complete them when appropriate. Here's an example:\n\nName: Inform about weather\nDescription: Share the current weather conditions with the group using the Weather Tool.\nDeliverableGuide: Share the output of the Weather tool with the group."
 
-	taskList := "Task List:\n" + pb.taskList + "\n"
+	tasks := "Task List:\n" + pb.tasks + "\n"
 
-	pb.sections = append(pb.sections, taskPrimer, taskList)
+	pb.sections = append(pb.sections, taskPrimer, tasks)
 	return pb
 }
 

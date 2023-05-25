@@ -52,6 +52,7 @@ func (t *Transcript) addLine(formattedText string) {
 		t.lines = t.lines[1:]
 	}
 	t.lines = append(t.lines, formattedText)
+	log.Printf("Transcript Line: %s", formattedText)
 }
 
 func (t *Transcript) AddSpokenLine(line *Line) error {
@@ -100,8 +101,6 @@ func (t *Transcript) SendLineToRedis(line Line, formattedLine string) error {
 	timeout := 5 * time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-
-	log.Printf("Line to send to redis: %s\n", formattedLine)
 
 	result, err := t.redisClient.ZAdd(ctx, t.transcriptKey, redis.Z{
 		Score:  float64(line.Time.UnixMilli()),

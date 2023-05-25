@@ -21,10 +21,9 @@ type TranscriberConfig struct {
 }
 
 type Transcriber struct {
-	BotName         string
-	Config          TranscriberConfig
-	IgnoredUsersMap map[string]struct{}
-	Responder       *responder.Responder
+	BotName   string
+	Config    TranscriberConfig
+	Responder *responder.Responder
 }
 
 func NewTranscriber(botName string, config TranscriberConfig, responder *responder.Responder) *Transcriber {
@@ -33,10 +32,9 @@ func NewTranscriber(botName string, config TranscriberConfig, responder *respond
 		ignoredUsersMap[ignoredUser] = struct{}{}
 	}
 	return &Transcriber{
-		BotName:         botName,
-		Config:          config,
-		IgnoredUsersMap: ignoredUsersMap,
-		Responder:       responder,
+		BotName:   botName,
+		Config:    config,
+		Responder: responder,
 	}
 }
 
@@ -129,6 +127,10 @@ func (t *Transcriber) NewStream(ctx context.Context, onClose func(), username st
 }
 
 func (t *Transcriber) IsIgnored(userId string) bool {
-	_, ok := t.IgnoredUsersMap[userId]
-	return ok
+	for _, ignoredUser := range t.Config.IgnoredUsers {
+		if userId == ignoredUser {
+			return true
+		}
+	}
+	return false
 }

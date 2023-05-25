@@ -26,7 +26,7 @@ func NewOpenAILLM(config OpenAIConfig) *OpenAILLM {
 }
 
 func (o *OpenAILLM) GetTranscriptResponseStream(transcript string, botName string, promptContents *promptbuilder.PromptContents) (*goOpenai.ChatCompletionStream, usage.LLMEvent, error) {
-	pb := promptbuilder.NewPromptBuilder(botName, transcript, promptContents.Personality, promptContents.ToolList, promptContents.Documents, promptContents.Tasks)
+	pb := promptbuilder.NewPromptBuilder(botName, transcript, promptContents.Personality, promptContents.Tools, promptContents.Documents, promptContents.Tasks)
 
 	pb.AddIntroduction()
 
