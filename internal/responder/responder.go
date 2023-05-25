@@ -211,9 +211,18 @@ func (r *Responder) getTokenStream(ctx context.Context, lines string, sentenceCh
 			// If token is a "|", we've reached the tool message section
 			if strings.Contains(currentToken, "|") {
 				inToolMessages = true
-				// Don't append this token to the sentence
 
+				// Split the current token into parts separated by "|"
+				parts := strings.SplitN(currentToken, "|", 2)
+
+				// If there are characters after the "|", add them to the tool message
+				if len(parts) == 2 {
+					toolMessageBuilder.WriteString(parts[1])
+				}
+
+				// Don't append this token to the sentence
 				sentenceBuilder.WriteString(previousToken)
+
 				// Emit the remaining sentence
 				sentenceChan <- sentenceBuilder.String()
 				sentenceBuilder.Reset()

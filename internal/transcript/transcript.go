@@ -83,7 +83,7 @@ func (t *Transcript) AddInterruptionLine(username string, botName string) {
 }
 
 func (t *Transcript) AddTaskReminderLine() {
-	line := "[Tasks pending]"
+	line := "[Complete pending tasks]"
 	t.addLine(line)
 }
 

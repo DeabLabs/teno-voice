@@ -3,6 +3,7 @@ package tools
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 type Tool struct {
@@ -18,11 +19,18 @@ type ToolMessage struct {
 }
 
 func IsValidToolMessage(message string, availableTools []Tool) bool {
+	lastBracket := strings.LastIndex(message, "]")
+	if lastBracket != -1 {
+		message = message[:lastBracket+1]
+	}
+
 	var toolMessages []ToolMessage
 	err := json.Unmarshal([]byte(message), &toolMessages)
 
 	// If there's an error, the JSON was invalid.
 	if err != nil {
+		// Log the specific unmarshalling error for debugging.
+		fmt.Printf("Tool message JSON unmarshal error: %v\n", err)
 		return false
 	}
 
@@ -39,7 +47,11 @@ func IsValidToolMessage(message string, availableTools []Tool) bool {
 	// Iterate through the tool messages, checking that each has a non-empty "name" and "input",
 	// and that the "name" corresponds to an available tool.
 	for _, toolMessage := range toolMessages {
-		if toolMessage.Name == "" || toolMessage.Input == "" || !availableToolNames[toolMessage.Name] {
+		// Trim leading and trailing whitespace from the name and input.
+		name := strings.TrimSpace(toolMessage.Name)
+		input := strings.TrimSpace(toolMessage.Input)
+
+		if name == "" || input == "" || !availableToolNames[name] {
 			return false
 		}
 	}

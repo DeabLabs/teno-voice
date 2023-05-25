@@ -306,7 +306,15 @@ func UpdateConfig(dependencies *deps.Deps) func(w http.ResponseWriter, r *http.R
 				return
 			}
 
+			shouldRespond := len(call.responder.PromptContents.Tasks) < len(config.PromptContents.Tasks)
+
 			call.responder.PromptContents = *config.PromptContents
+
+			if shouldRespond {
+				call.responder.Transcript.AddTaskReminderLine()
+				call.responder.Respond(time.Now())
+			}
+
 		}
 
 		if config.TranscriptConfig != nil {
