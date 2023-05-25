@@ -1,7 +1,6 @@
 package deepgram
 
 import (
-	"log"
 	"net/http"
 	"net/url"
 
@@ -45,7 +44,7 @@ type LiveTranscriptionOptions struct {
 func (dg *Client) LiveTranscription(options LiveTranscriptionOptions) (*websocket.Conn, *http.Response, error) {
 	query, _ := query.Values(options)
 	u := url.URL{Scheme: "wss", Host: dg.Host, Path: "/v1/listen", RawQuery: query.Encode()}
-	log.Printf("connecting to %s", u.String())
+	// log.Printf("connecting to %s", u.String())
 
 	header := http.Header{
 		"Host":          []string{dg.Host},
