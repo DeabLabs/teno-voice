@@ -55,7 +55,6 @@ func (t *Transcript) ClearTranscript() {
 
 func (t *Transcript) Cleanup() {
 	t.ClearTranscript()
-	t.redisClient.Close()
 	close(t.transcriptSSEChannel)
 }
 

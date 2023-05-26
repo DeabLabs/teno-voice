@@ -3,6 +3,7 @@ package openai
 import (
 	"context"
 	"errors"
+	"log"
 
 	"com.deablabs.teno-voice/internal/llm/promptbuilder"
 	"com.deablabs.teno-voice/internal/llm/tiktoken"
@@ -29,12 +30,26 @@ func NewOpenAILLM(config OpenAIConfig) *OpenAILLM {
 }
 
 func (o *OpenAILLM) GetTranscriptResponseStream(transcript *transcript.Transcript, botName string, promptContents *promptbuilder.PromptContents) (*goOpenai.ChatCompletionStream, usage.LLMEvent, error) {
-	pb := promptbuilder.NewPromptBuilder(botName, transcript, promptContents.Personality, promptContents.Tools, promptContents.Documents, promptContents.Tasks)
+	pb := promptbuilder.NewPromptBuilder(botName, transcript, promptContents)
 
-	pb.AddIntroduction()
-	pb.AddTools()
-	pb.AddDocs()
-	pb.AddTasks()
+	pb.AddBotPrimer()
+
+	if promptContents.Tools != nil {
+		pb.AddToolPrimer()
+		pb.AddTools()
+	}
+
+	if promptContents.Documents != nil {
+		pb.AddDocumentPrimer()
+		pb.AddDocs()
+	}
+
+	if promptContents.Tasks != nil {
+		pb.AddTaskPrimer()
+		pb.AddTasks()
+	}
+
+	pb.AddTranscriptPrimer()
 
 	systemContent := pb.Build()
 
@@ -62,9 +77,9 @@ func (o *OpenAILLM) GetTranscriptResponseStream(transcript *transcript.Transcrip
 	}
 
 	// Log prompt
-	// for _, message := range messages {
-	// 	log.Print(message.Role, message.Content)
-	// }
+	for _, message := range messages {
+		log.Print("[" + message.Role + "] " + message.Content)
+	}
 
 	stream, err := c.CreateChatCompletionStream(ctx, req)
 	if err != nil {
