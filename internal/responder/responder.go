@@ -98,6 +98,15 @@ func NewResponder(ctx context.Context, args NewResponderArgs) *Responder {
 	return responder
 }
 
+func (r *Responder) Cleanup() {
+	if r.cancelResponse != nil {
+		r.cancelResponse()
+	}
+	close(r.toolMessagesSSEChannel)
+	close(r.playAudioChannel)
+	r.Transcript.Cleanup()
+}
+
 func (r *Responder) Respond(receivedTranscriptionTime time.Time) context.CancelFunc {
 	r.isResponding = true
 	ctx, cancelFunc := context.WithCancel(context.Background())
@@ -156,6 +165,14 @@ func (r *Responder) Respond(receivedTranscriptionTime time.Time) context.CancelF
 	}()
 
 	return cancelFunc
+}
+
+func (r *Responder) AttemptToRespond() {
+	if r.isSpeaking || r.isResponding || r.VoiceUXConfig.SpeakingMode == "NeverSpeak" {
+		return
+	}
+
+	r.cancelResponse = r.Respond(time.Now())
 }
 
 func (r *Responder) getTokenStream(ctx context.Context, lines string, sentenceChan chan string, toolMessageChan chan string) {
@@ -339,6 +356,7 @@ func (r *Responder) playSynthesizedSentences(ctx context.Context, receivedTransc
 					r.setSpeaking(false)
 					opusPackets.Close()
 					r.isResponding = false
+					r.LastResponseEnd = time.Now()
 					return
 				default:
 				}
@@ -441,11 +459,11 @@ func (r *Responder) AutoRespond(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		default:
-			if r.VoiceUXConfig.AutoRespondInterval != 0 && !r.isResponding && len(r.PromptContents.Tasks) > 0 {
+			if r.VoiceUXConfig.AutoRespondInterval != 0 && len(r.PromptContents.Tasks) > 0 {
 				// Check if AutoRespondInterval time has passed since the last response
 				if time.Since(r.LastResponseEnd) >= time.Duration(r.VoiceUXConfig.AutoRespondInterval)*time.Second {
 					r.Transcript.AddTaskReminderLine()
-					r.Respond(time.Now())
+					r.AttemptToRespond()
 				}
 				time.Sleep(time.Duration(max(1, r.VoiceUXConfig.AutoRespondInterval)) * time.Second)
 			} else {

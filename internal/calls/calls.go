@@ -206,6 +206,8 @@ func JoinVoiceChannel(dependencies *deps.Deps) func(w http.ResponseWriter, r *ht
 			case <-ongoingCtx.Done():
 			}
 
+			responder.Cleanup()
+
 			leaveCtx, leaveCancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer leaveCancel()
 			conn.Close(leaveCtx)
@@ -312,7 +314,7 @@ func UpdateConfig(dependencies *deps.Deps) func(w http.ResponseWriter, r *http.R
 
 			if shouldRespond {
 				call.responder.Transcript.AddTaskReminderLine()
-				call.responder.Respond(time.Now())
+				call.responder.AttemptToRespond()
 			}
 
 		}

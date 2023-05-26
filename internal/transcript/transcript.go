@@ -43,6 +43,19 @@ func NewTranscript(transcriptSSEChannel chan string, redisClient *redis.Client, 
 	}
 }
 
+func (t *Transcript) ClearTranscript() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.lines = make([]string, 0)
+}
+
+func (t *Transcript) Cleanup() {
+	t.ClearTranscript()
+	t.redisClient.Close()
+	close(t.transcriptSSEChannel)
+}
+
 func (t *Transcript) addLine(formattedText string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
