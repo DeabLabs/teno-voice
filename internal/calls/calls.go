@@ -314,14 +314,14 @@ func UpdateConfig(dependencies *deps.Deps) func(w http.ResponseWriter, r *http.R
 				return
 			}
 
-			shouldRespond := len(call.responder.PromptContents.Tasks) < len(config.PromptContents.Tasks)
+			// shouldRespond := len(call.responder.PromptContents.Tasks) < len(config.PromptContents.Tasks)
 
 			call.responder.PromptContents = *config.PromptContents
 
-			if shouldRespond {
-				call.responder.Transcript.AddTaskReminderLine()
-				call.responder.AttemptToRespond()
-			}
+			// if shouldRespond {
+			// 	call.responder.Transcript.AddTaskReminderLine()
+			// 	call.responder.AttemptToRespond()
+			// }
 
 		}
 
@@ -391,7 +391,11 @@ func TranscriptSSEHandler(dependencies *deps.Deps) http.HandlerFunc {
 			select {
 			case <-r.Context().Done():
 				return
-			case transcriptLine := <-sseChannelForGuild:
+			case transcriptLine, ok := <-sseChannelForGuild:
+				if !ok {
+					// The channel has been closed.
+					return
+				}
 				fmt.Fprintf(w, "data: %s\n\n", transcriptLine)
 				flusher.Flush()
 			}
@@ -435,7 +439,12 @@ func ToolMessagesSSEHandler(dependencies *deps.Deps) http.HandlerFunc {
 			select {
 			case <-r.Context().Done():
 				return
-			case toolMessage := <-toolMessagesSSEChannel:
+			case toolMessage, ok := <-toolMessagesSSEChannel:
+				if !ok {
+					// The channel has been closed.
+					return
+				}
+
 				fmt.Fprintf(w, "data: %s\n\n", toolMessage)
 				flusher.Flush()
 			}
@@ -479,7 +488,11 @@ func UsageSSEHandler(dependencies *deps.Deps) http.HandlerFunc {
 			select {
 			case <-r.Context().Done():
 				return
-			case usageUpdate := <-usageSSEChannel:
+			case usageUpdate, ok := <-usageSSEChannel:
+				if !ok {
+					// The channel has been closed.
+					return
+				}
 				fmt.Fprintf(w, "data: %s\n\n", usageUpdate)
 				flusher.Flush()
 			}

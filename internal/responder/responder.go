@@ -96,7 +96,7 @@ func NewResponder(ctx context.Context, args NewResponderArgs) *Responder {
 		LastResponseEnd:        time.Now(),
 	}
 
-	go responder.AutoRespond(ctx)
+	// go responder.AutoRespond(ctx)
 
 	return responder
 }
@@ -120,16 +120,13 @@ func (r *Responder) Respond(receivedTranscriptionTime time.Time) context.CancelF
 	// Create channel for tool messages ready to be sent
 	toolMessageChan := make(chan string, 1)
 
-	// Get recent lines of the transcript
-	lines := r.Transcript.GetTranscript()
-
 	wg := sync.WaitGroup{}
 
 	// Start the goroutine to get a stream of tokens
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		r.getTokenStream(ctx, lines, sentenceChan, toolMessageChan)
+		r.getTokenStream(ctx, sentenceChan, toolMessageChan)
 	}()
 
 	// Start the goroutine to synthesize the sentences into audio
@@ -158,7 +155,11 @@ func (r *Responder) Respond(receivedTranscriptionTime time.Time) context.CancelF
 		default:
 			// If the context wasn't cancelled, send the tool message
 			for toolMessage := range toolMessageChan {
-				r.toolMessagesSSEChannel <- toolMessage
+				select {
+				case r.toolMessagesSSEChannel <- toolMessage:
+				default:
+				}
+
 			}
 		}
 
@@ -179,9 +180,9 @@ func (r *Responder) AttemptToRespond() {
 	r.cancelResponse = r.Respond(time.Now())
 }
 
-func (r *Responder) getTokenStream(ctx context.Context, lines string, sentenceChan chan string, toolMessageChan chan string) {
+func (r *Responder) getTokenStream(ctx context.Context, sentenceChan chan string, toolMessageChan chan string) {
 	// Create the chat completion stream
-	stream, usageEvent, err := r.LlmService.GetTranscriptResponseStream(lines, r.BotName, &r.PromptContents)
+	stream, usageEvent, err := r.LlmService.GetTranscriptResponseStream(r.Transcript, r.BotName, &r.PromptContents)
 	if err != nil {
 		fmt.Printf("Token stream error: %v\n", err)
 		return
@@ -292,7 +293,10 @@ func (r *Responder) getTokenStream(ctx context.Context, lines string, sentenceCh
 		if err != nil {
 			fmt.Printf("Error converting usage event to JSON: %v\n", err)
 		} else {
-			r.usageSSEChannel <- usageJson
+			select {
+			case r.usageSSEChannel <- usageJson:
+			default:
+			}
 		}
 	}
 }
@@ -324,7 +328,10 @@ func (r *Responder) synthesizeSentences(ctx context.Context, sentenceChan chan s
 		if err != nil {
 			fmt.Printf("Error converting usage event to JSON: %v\n", err)
 		} else {
-			r.usageSSEChannel <- usageJson
+			select {
+			case r.usageSSEChannel <- usageJson:
+			default:
+			}
 		}
 	}
 }
@@ -411,6 +418,7 @@ func (r *Responder) NewTranscription(line string, botNameSpoken float64, usernam
 		Text:     line,
 		Username: username,
 		UserId:   userId,
+		Type:     "user",
 		Time:     time.Now(),
 	}
 
@@ -453,7 +461,10 @@ func (r *Responder) NewTranscription(line string, botNameSpoken float64, usernam
 	if err != nil {
 		fmt.Printf("Error converting usage event to JSON: %v\n", err)
 	} else {
-		r.usageSSEChannel <- usageJson
+		select {
+		case r.usageSSEChannel <- usageJson:
+		default:
+		}
 	}
 }
 
@@ -462,6 +473,7 @@ func (r *Responder) botLineSpoken(line string) {
 		Text:     line,
 		Username: r.BotName,
 		UserId:   r.botId.String(),
+		Type:     "assistant",
 		Time:     time.Now(),
 	}
 	r.Transcript.AddSpokenLine(newLine)

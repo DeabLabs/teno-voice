@@ -11,10 +11,11 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	goOpenai "github.com/sashabaranov/go-openai"
 )
 
 type Transcript struct {
-	lines                []string
+	lines                []Line
 	transcriptSSEChannel chan string
 	redisClient          redis.Client
 	transcriptKey        string
@@ -27,15 +28,17 @@ type TranscriptConfig struct {
 }
 
 type Line struct {
-	Text     string
-	Username string
-	UserId   string
-	Time     time.Time
+	Text          string
+	FormattedText string
+	Username      string
+	UserId        string
+	Type          string
+	Time          time.Time
 }
 
 func NewTranscript(transcriptSSEChannel chan string, redisClient *redis.Client, transcriptKey string, config TranscriptConfig) *Transcript {
 	return &Transcript{
-		lines:                make([]string, 0),
+		lines:                make([]Line, 0),
 		transcriptSSEChannel: transcriptSSEChannel,
 		redisClient:          *redisClient,
 		transcriptKey:        transcriptKey,
@@ -47,7 +50,7 @@ func (t *Transcript) ClearTranscript() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	t.lines = make([]string, 0)
+	t.lines = make([]Line, 0)
 }
 
 func (t *Transcript) Cleanup() {
@@ -56,7 +59,7 @@ func (t *Transcript) Cleanup() {
 	close(t.transcriptSSEChannel)
 }
 
-func (t *Transcript) addLine(formattedText string) {
+func (t *Transcript) addLine(line *Line) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -64,17 +67,19 @@ func (t *Transcript) addLine(formattedText string) {
 	if len(t.lines) >= t.Config.NumberOfTranscriptLines {
 		t.lines = t.lines[1:]
 	}
-	t.lines = append(t.lines, formattedText)
-	log.Printf("Transcript Line: %s", formattedText)
+
+	t.lines = append(t.lines, *line)
+	log.Printf("Transcript Line: %s", line.FormattedText)
 }
 
 func (t *Transcript) AddSpokenLine(line *Line) error {
-	formattedText := formatLine(*line)
-	t.addLine(formattedText)
+	line.FormattedText = formatLine(*line)
+
+	t.addLine(line)
 
 	if t.transcriptKey != "" {
 		go func() {
-			redisText := formatForRedis(*line, formattedText)
+			redisText := formatForRedis(*line, line.FormattedText)
 			err := t.SendLineToRedis(*line, redisText)
 			if err != nil {
 				fmt.Printf("SendLineToRedis error: %v\n", err)
@@ -83,7 +88,7 @@ func (t *Transcript) AddSpokenLine(line *Line) error {
 	}
 
 	select {
-	case t.transcriptSSEChannel <- formattedText:
+	case t.transcriptSSEChannel <- line.FormattedText:
 	default:
 	}
 
@@ -91,23 +96,91 @@ func (t *Transcript) AddSpokenLine(line *Line) error {
 }
 
 func (t *Transcript) AddInterruptionLine(username string, botName string) {
-	line := fmt.Sprintf("[%s interrupted %s]", username, botName)
-	t.addLine(line)
+	text := fmt.Sprintf("[%s interrupted %s]", username, botName)
+
+	newLine := &Line{
+		Text:     text,
+		Username: "",
+		UserId:   "",
+		Type:     "system",
+		Time:     time.Now(),
+	}
+
+	t.addLine(newLine)
 }
 
 func (t *Transcript) AddTaskReminderLine() {
-	line := "[Complete pending tasks]"
-	t.addLine(line)
+	text := "[Complete pending tasks]"
+
+	newLine := &Line{
+		Text:     text,
+		Username: "",
+		UserId:   "",
+		Type:     "system",
+		Time:     time.Now(),
+	}
+
+	t.addLine(newLine)
 }
 
 func (t *Transcript) AddToolMessageLine(toolMessage string) {
-	toolMessageLine := fmt.Sprintf("|%s", toolMessage)
-	t.addLine(toolMessageLine)
+	text := fmt.Sprintf("|%s", toolMessage)
+
+	newLine := &Line{
+		Text:     text,
+		Username: "",
+		UserId:   "",
+		Type:     "assistant",
+		Time:     time.Now(),
+	}
+
+	t.addLine(newLine)
 }
 
-// Get lines as a string separated by newlines
-func (t *Transcript) GetTranscript() string {
-	return strings.Join(t.lines, "\n")
+func (t *Transcript) GetTranscriptString() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	var lineTexts []string
+	for _, line := range t.lines {
+		lineTexts = append(lineTexts, line.Text)
+	}
+
+	return strings.Join(lineTexts, "\n")
+}
+
+func (t *Transcript) GetTranscript() []Line {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	return t.lines
+}
+
+func (t *Transcript) ToChatCompletionMessages() []goOpenai.ChatCompletionMessage {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	messages := make([]goOpenai.ChatCompletionMessage, len(t.lines))
+	for i, line := range t.lines {
+		var role string
+		var content string
+		switch line.Type {
+		case "system":
+			role = goOpenai.ChatMessageRoleSystem
+			content = line.Text
+		case "assistant":
+			role = goOpenai.ChatMessageRoleAssistant
+			content = line.Text
+		default:
+			role = goOpenai.ChatMessageRoleUser
+			content = line.Username + ": " + line.Text
+		}
+		messages[i] = goOpenai.ChatCompletionMessage{
+			Role:    role,
+			Content: content,
+		}
+	}
+	return messages
 }
 
 func (t *Transcript) SendLineToRedis(line Line, formattedLine string) error {

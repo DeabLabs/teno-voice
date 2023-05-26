@@ -6,6 +6,7 @@ import (
 
 	"com.deablabs.teno-voice/internal/llm/openai"
 	"com.deablabs.teno-voice/internal/llm/promptbuilder"
+	"com.deablabs.teno-voice/internal/transcript"
 	"com.deablabs.teno-voice/internal/usage"
 	"github.com/go-playground/validator/v10"
 	goOpenai "github.com/sashabaranov/go-openai"
@@ -17,7 +18,7 @@ type LLMConfigPayload struct {
 }
 
 type LLMService interface {
-	GetTranscriptResponseStream(transcript string, botName string, promptContents *promptbuilder.PromptContents) (*goOpenai.ChatCompletionStream, usage.LLMEvent, error)
+	GetTranscriptResponseStream(transcript *transcript.Transcript, botName string, promptContents *promptbuilder.PromptContents) (*goOpenai.ChatCompletionStream, usage.LLMEvent, error)
 }
 
 func LLMConfigValidation(fl validator.FieldLevel) bool {
@@ -70,18 +71,6 @@ func ParseLLMConfig(payload LLMConfigPayload) (LLMService, error) {
 		}
 
 		return openai.NewOpenAILLM(config), nil
-	// case "elevenlabs":
-	// 	var config ElevenLabsConfig
-	// 	configData, err := json.Marshal(payload.TextToSpeechConfig)
-	// 	if err != nil {
-	// 		// handle error
-	// 	}
-	// 	err = json.Unmarshal(configData, &config)
-	// 	if err != nil {
-	// 		// handle error
-	// 	}
-
-	// 	return NewElevenLabsTTS(config), nil
 
 	default:
 		err := fmt.Errorf("unknown LLM service: %s", payload.LLMServiceName)
