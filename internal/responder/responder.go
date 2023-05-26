@@ -42,6 +42,7 @@ type NewResponderArgs struct {
 	PromptContents         *promptbuilder.PromptContents
 	TranscriptSSEChannel   chan string
 	ToolMessagesSSEChannel chan string
+	UsageSSEChannel        chan string
 	RedisClient            *redis.Client
 	RedisTranscriptKey     string
 	TranscriptConfig       transcript.TranscriptConfig
@@ -62,6 +63,7 @@ type Responder struct {
 	PromptContents         promptbuilder.PromptContents
 	botId                  snowflake.ID
 	toolMessagesSSEChannel chan string
+	usageSSEChannel        chan string
 	isSpeaking             bool
 	isResponding           bool
 	LastResponseEnd        time.Time
@@ -88,6 +90,7 @@ func NewResponder(ctx context.Context, args NewResponderArgs) *Responder {
 		linesSinceLastResponse: 0,
 		botId:                  args.BotId,
 		toolMessagesSSEChannel: args.ToolMessagesSSEChannel,
+		usageSSEChannel:        args.UsageSSEChannel,
 		isSpeaking:             false,
 		isResponding:           false,
 		LastResponseEnd:        time.Now(),
@@ -104,6 +107,7 @@ func (r *Responder) Cleanup() {
 	}
 	close(r.toolMessagesSSEChannel)
 	close(r.playAudioChannel)
+	close(r.usageSSEChannel)
 	r.Transcript.Cleanup()
 }
 
@@ -284,7 +288,12 @@ func (r *Responder) getTokenStream(ctx context.Context, lines string, sentenceCh
 
 	usageEvent.SetCompletionTokens(totalTokens)
 	if !usageEvent.IsEmpty() {
-		usage.SendEventToDB(usageEvent)
+		usageJson, err := usage.UsageEventToJSON(usageEvent)
+		if err != nil {
+			fmt.Printf("Error converting usage event to JSON: %v\n", err)
+		} else {
+			r.usageSSEChannel <- usageJson
+		}
 	}
 }
 
@@ -299,7 +308,7 @@ func (r *Responder) synthesizeSentences(ctx context.Context, sentenceChan chan s
 			return
 		default:
 		}
-		opusPackets, err := r.TtsService.Synthesize(sentence)
+		opusPackets, usageEvent, err := r.TtsService.Synthesize(sentence)
 		if err != nil {
 			fmt.Printf("Error generating speech: %v\n", err)
 			continue
@@ -310,6 +319,13 @@ func (r *Responder) synthesizeSentences(ctx context.Context, sentenceChan chan s
 			sentence:    sentence,
 		}
 		sentenceIndex++
+
+		usageJson, err := usage.UsageEventToJSON(usageEvent)
+		if err != nil {
+			fmt.Printf("Error converting usage event to JSON: %v\n", err)
+		} else {
+			r.usageSSEChannel <- usageJson
+		}
 	}
 }
 
@@ -388,7 +404,7 @@ func (r *Responder) playSynthesizedSentences(ctx context.Context, receivedTransc
 	r.LastResponseEnd = time.Now()
 }
 
-func (r *Responder) NewTranscription(line string, botNameSpoken float64, username string, userId string) {
+func (r *Responder) NewTranscription(line string, botNameSpoken float64, username string, userId string, usageEvent usage.UsageEvent) {
 	receivedTranscriptionTime := time.Now()
 
 	newLine := &transcript.Line{
@@ -431,6 +447,13 @@ func (r *Responder) NewTranscription(line string, botNameSpoken float64, usernam
 			r.Transcript.AddInterruptionLine(username, r.BotName)
 		}
 		r.cancelResponse = r.Respond(receivedTranscriptionTime)
+	}
+
+	usageJson, err := usage.UsageEventToJSON(usageEvent)
+	if err != nil {
+		fmt.Printf("Error converting usage event to JSON: %v\n", err)
+	} else {
+		r.usageSSEChannel <- usageJson
 	}
 }
 

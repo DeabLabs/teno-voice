@@ -6,6 +6,7 @@ import (
 	"io"
 
 	"com.deablabs.teno-voice/internal/textToSpeech/azure"
+	"com.deablabs.teno-voice/internal/usage"
 	"github.com/go-playground/validator/v10"
 )
 
@@ -15,7 +16,7 @@ type TTSConfigPayload struct {
 }
 
 type TextToSpeechService interface {
-	Synthesize(text string) (io.ReadCloser, error)
+	Synthesize(text string) (io.ReadCloser, usage.UsageEvent, error)
 }
 
 func TTSConfigValidation(fl validator.FieldLevel) bool {

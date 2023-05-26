@@ -73,10 +73,10 @@ func (a *AzureTTS) getAccessToken() (string, error) {
 	return string(token), nil
 }
 
-func (a *AzureTTS) Synthesize(text string) (io.ReadCloser, error) {
+func (a *AzureTTS) Synthesize(text string) (io.ReadCloser, usage.UsageEvent, error) {
 	token, err := a.getAccessToken()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	ssml := SSML{
@@ -92,13 +92,13 @@ func (a *AzureTTS) Synthesize(text string) (io.ReadCloser, error) {
 
 	ssmlBytes, err := xml.Marshal(ssml)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	client := &http.Client{}
 	req, err := http.NewRequest("POST", ttsEndpoint, bytes.NewReader(ssmlBytes))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	req.Header.Add("Authorization", "Bearer "+token)
@@ -108,18 +108,18 @@ func (a *AzureTTS) Synthesize(text string) (io.ReadCloser, error) {
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		return nil, nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
 	opusReader := NewOpusPacketReader(resp.Body)
 
-	usage.NewTextToSpeechEvent("azure", a.Config.Model, len(text))
+	usageEvent := usage.NewTextToSpeechEvent("azure", a.Config.Model, len(text))
 
-	return opusReader, nil
+	return opusReader, usageEvent, nil
 }
 
 type OpusPacketReader struct {

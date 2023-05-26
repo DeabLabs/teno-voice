@@ -104,15 +104,11 @@ func (t *Transcriber) NewStream(ctx context.Context, onClose func(), username st
 								}
 							}
 						}
-						if transcription != "" {
-							t.Responder.NewTranscription(transcription, botNameConfidence, username, userId)
-						}
 
 						usageEvent := usage.NewTranscriptionEvent("deepgram", "nova-streaming", jsonParsed.Path("duration").Data().(float64)/60.0)
 
-						// Send event struct if its not empty
-						if !usageEvent.IsEmpty() {
-							usage.SendEventToDB(usageEvent)
+						if transcription != "" {
+							t.Responder.NewTranscription(transcription, botNameConfidence, username, userId, usageEvent)
 						}
 					}
 				}

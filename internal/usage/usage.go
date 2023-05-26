@@ -1,20 +1,19 @@
 package usage
 
+import "encoding/json"
+
 type UsageEvent interface {
 	UsageType() string
 }
 
-func SendEventToDB(event UsageEvent) {
-	// //switch e := event.(type) {
-	// case *TextToSpeechEvent:
-	// 	//log.Printf("TTS event with %d characters", e.Characters)
-	// case *TranscriptionEvent:
-	// 	//log.Printf("Transcription event with %0.2f minutes", e.Minutes)
-	// case *LLMEvent:
-	// 	//log.Printf("LLM event with %d prompt tokens and %d completion tokens", e.PromptTokens, e.CompletionTokens)
-	// default:
-	// 	//log.Printf("Unknown event")
-	// }
+// usageEventToJSON converts a UsageEvent to a JSON string
+func UsageEventToJSON(event UsageEvent) (string, error) {
+	jsonEvent, err := json.Marshal(event)
+	if err != nil {
+		return "", err
+	}
+
+	return string(jsonEvent), nil
 }
 
 type TextToSpeechEvent struct {
@@ -24,9 +23,8 @@ type TextToSpeechEvent struct {
 	// other common fields...
 }
 
-func NewTextToSpeechEvent(service string, model string, characters int) {
-	usageEvent := &TextToSpeechEvent{Service: service, Model: model, Characters: characters}
-	SendEventToDB(usageEvent)
+func NewTextToSpeechEvent(service string, model string, characters int) *TextToSpeechEvent {
+	return &TextToSpeechEvent{Service: service, Model: model, Characters: characters}
 }
 
 func (t TextToSpeechEvent) UsageType() string {
@@ -65,8 +63,7 @@ type LLMEvent struct {
 }
 
 func NewLLMEvent(service string, model string, promptTokens int, completionTokens int) *LLMEvent {
-	usageEvent := &LLMEvent{Service: service, Model: model, PromptTokens: promptTokens, CompletionTokens: completionTokens}
-	return usageEvent
+	return &LLMEvent{Service: service, Model: model, PromptTokens: promptTokens, CompletionTokens: completionTokens}
 }
 
 func (l *LLMEvent) SetCompletionTokens(tokens int) {

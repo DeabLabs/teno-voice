@@ -53,6 +53,8 @@ func main() {
 	router.Get("/{bot_id}/{guild_id}/transcript", calls.TranscriptSSEHandler(dependencies))
 	// Subscribes to the tool messages SSE stream, which sends tool messages as strings when the responder sends them
 	router.Get("/{bot_id}/{guild_id}/tool-messages", calls.ToolMessagesSSEHandler(dependencies))
+	// Subscribes to the usages SSE stream, which sends tts, transcription, and llm usage events as strings when the responder sends them
+	router.Get("/{bot_id}/{guild_id}/service-usages", calls.UsageSSEHandler(dependencies))
 
 	// Start the REST API server
 	log.Info("Starting REST API server on :8080")

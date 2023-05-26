@@ -47,6 +47,7 @@ type Call struct {
 	closeSignalChan     chan struct{}
 	transcriptSSEChan   chan string
 	toolMessagesSSEChan chan string
+	usageSSEChan        chan string
 	responder           *responder.Responder
 	transcriber         *speechtotext.Transcriber
 }
@@ -144,6 +145,9 @@ func JoinVoiceChannel(dependencies *deps.Deps) func(w http.ResponseWriter, r *ht
 		// Make sse channel for tool messages
 		toolMessagesSSEChannel := make(chan string)
 
+		// Make sse channel for usage messages
+		usageSSEChannel := make(chan string)
+
 		var redisClient redis.Client
 
 		if joinReq.RedisTranscriptKey != "" {
@@ -166,6 +170,7 @@ func JoinVoiceChannel(dependencies *deps.Deps) func(w http.ResponseWriter, r *ht
 			PromptContents:         joinReq.Config.PromptContents,
 			TranscriptSSEChannel:   transcriptSSEChannel,
 			ToolMessagesSSEChannel: toolMessagesSSEChannel,
+			UsageSSEChannel:        usageSSEChannel,
 			RedisClient:            &redisClient,
 			RedisTranscriptKey:     joinReq.RedisTranscriptKey,
 			TranscriptConfig:       *joinReq.Config.TranscriptConfig,
@@ -184,6 +189,7 @@ func JoinVoiceChannel(dependencies *deps.Deps) func(w http.ResponseWriter, r *ht
 			closeSignalChan:     closeSignal,
 			transcriptSSEChan:   transcriptSSEChannel,
 			toolMessagesSSEChan: toolMessagesSSEChannel,
+			usageSSEChan:        usageSSEChannel,
 			responder:           responder,
 			transcriber:         transcriber,
 		}
@@ -431,6 +437,50 @@ func ToolMessagesSSEHandler(dependencies *deps.Deps) http.HandlerFunc {
 				return
 			case toolMessage := <-toolMessagesSSEChannel:
 				fmt.Fprintf(w, "data: %s\n\n", toolMessage)
+				flusher.Flush()
+			}
+		}
+	})
+}
+
+func UsageSSEHandler(dependencies *deps.Deps) http.HandlerFunc {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callId := chi.URLParam(r, "bot_id") + "-" + chi.URLParam(r, "guild_id")
+
+		callsMutex.Lock()
+		call, ok := calls[callId]
+		if !ok {
+			http.Error(w, "Not in voice call", http.StatusNotFound)
+			return
+		}
+		usageSSEChannel := call.usageSSEChan
+		callsMutex.Unlock()
+
+		if !ok {
+			http.Error(w, "No active SSE channels for this guild", http.StatusNotFound)
+			return
+		}
+
+		// Set the necessary headers for SSE
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+
+		// Use a flusher to send data immediately to the client
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "Streaming unsupported!", http.StatusInternalServerError)
+			return
+		}
+
+		// Listen for new usage updates and send them to the client
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case usageUpdate := <-usageSSEChannel:
+				fmt.Fprintf(w, "data: %s\n\n", usageUpdate)
 				flusher.Flush()
 			}
 		}
