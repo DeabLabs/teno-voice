@@ -316,15 +316,24 @@ func UpdateConfig(dependencies *deps.Deps) func(w http.ResponseWriter, r *http.R
 				return
 			}
 
-			shouldRespond := len(call.responder.PromptContents.Documents) < len(config.PromptContents.Documents)
+			oldNumDocuments := len(call.responder.PromptContents.Documents)
+			newNumDocuments := len(config.PromptContents.Documents)
+
+			shouldRespond := oldNumDocuments < newNumDocuments
 
 			call.responder.PromptContents = *config.PromptContents
 
 			if shouldRespond && time.Since(call.startTime) > time.Second*3 {
-				call.responder.Transcript.AddNewDocumentAlertLine()
+				// Get names of the new documents
+				newDocuments := call.responder.PromptContents.Documents[oldNumDocuments:]
+				newDocumentNames := make([]string, len(newDocuments))
+				for i, doc := range newDocuments {
+					newDocumentNames[i] = doc.Name
+				}
+
+				call.responder.Transcript.AddNewDocumentAlertLine(newDocumentNames)
 				call.responder.AttemptToRespond(false)
 			}
-
 		}
 
 		if config.TranscriptConfig != nil {

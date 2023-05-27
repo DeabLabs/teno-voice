@@ -68,7 +68,7 @@ func (t *Transcript) addLine(line *Line) {
 	}
 
 	t.lines = append(t.lines, *line)
-	log.Printf("Transcript Line: %s", line.FormattedText)
+	log.Printf("Transcript Line: %s", line.Username+": "+line.Text)
 }
 
 func (t *Transcript) AddSpokenLine(line *Line) error {
@@ -109,7 +109,7 @@ func (t *Transcript) AddInterruptionLine(username string, botName string) {
 }
 
 func (t *Transcript) AddTaskReminderLine(task string) {
-	text := "Complete the task: " + task
+	text := "[Only visible to you] Complete the task: " + task
 
 	newLine := &Line{
 		Text:     text,
@@ -122,8 +122,11 @@ func (t *Transcript) AddTaskReminderLine(task string) {
 	t.addLine(newLine)
 }
 
-func (t *Transcript) AddNewDocumentAlertLine() {
-	text := "New document available, please relay the relevant information to the voice channel"
+func (t *Transcript) AddNewDocumentAlertLine(newDocumentNames []string) {
+	// Combine all document names into a single string separated by commas
+	documentNames := strings.Join(newDocumentNames, ", ")
+
+	text := fmt.Sprintf("[Only visible to you] New document(s) available: %s. Please relay the relevant information to the voice channel.", documentNames)
 
 	newLine := &Line{
 		Text:     text,
@@ -169,12 +172,13 @@ func (t *Transcript) GetTranscript() []Line {
 	return t.lines
 }
 
-func (t *Transcript) ToChatCompletionMessages() []goOpenai.ChatCompletionMessage {
+func (t *Transcript) ToChatCompletionMessages() ([]goOpenai.ChatCompletionMessage, string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	var messages []goOpenai.ChatCompletionMessage
 	assistantBuffer := ""
+	transcriptString := ""
 
 	for i, line := range t.lines {
 		var role string
@@ -185,13 +189,14 @@ func (t *Transcript) ToChatCompletionMessages() []goOpenai.ChatCompletionMessage
 			content = line.Text
 		case "assistant":
 			role = goOpenai.ChatMessageRoleAssistant
-			assistantBuffer += line.Text + " "
+			assistantBuffer += strings.TrimSpace(line.Text) + " "
 			// If the next line is not from assistant or it is the last line, create a message from buffer
 			if i == len(t.lines)-1 || t.lines[i+1].Type != "assistant" {
 				messages = append(messages, goOpenai.ChatCompletionMessage{
 					Role:    role,
 					Content: strings.TrimSpace(assistantBuffer),
 				})
+				transcriptString += role + ": " + strings.TrimSpace(assistantBuffer) + "\n"
 				assistantBuffer = ""
 			}
 			continue
@@ -203,8 +208,9 @@ func (t *Transcript) ToChatCompletionMessages() []goOpenai.ChatCompletionMessage
 			Role:    role,
 			Content: content,
 		})
+		transcriptString += role + ": " + content + "\n"
 	}
-	return messages
+	return messages, transcriptString
 }
 
 func (t *Transcript) SendLineToRedis(line Line, formattedLine string) error {

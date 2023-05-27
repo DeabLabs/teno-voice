@@ -62,7 +62,9 @@ func (o *OpenAILLM) GetTranscriptResponseStream(transcript *transcript.Transcrip
 
 	messages = append(messages, systemMessage)
 
-	transcriptMessages := transcript.ToChatCompletionMessages()
+	transcriptMessages, transcriptString := transcript.ToChatCompletionMessages()
+
+	log.Print("Transcript: " + transcriptString)
 
 	messages = append(messages, transcriptMessages...)
 
@@ -77,16 +79,16 @@ func (o *OpenAILLM) GetTranscriptResponseStream(transcript *transcript.Transcrip
 	}
 
 	// Log prompt
-	for _, message := range messages {
-		log.Print("[" + message.Role + "] " + message.Content)
-	}
+	// for _, message := range messages {
+	// 	log.Print("[" + message.Role + "] " + message.Content)
+	// }
 
 	stream, err := c.CreateChatCompletionStream(ctx, req)
 	if err != nil {
 		return nil, usage.LLMEvent{}, errors.New("ChatCompletionStream error: " + err.Error())
 	}
 
-	usageEvent := usage.NewLLMEvent("service", o.Config.Model, tiktoken.TokenCount(systemContent, o.Config.Model), 0)
+	usageEvent := usage.NewLLMEvent("service", o.Config.Model, tiktoken.TokenCount(systemContent+transcriptString, o.Config.Model), 0)
 
 	return stream, *usageEvent, err
 }

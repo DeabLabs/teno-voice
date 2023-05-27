@@ -18,7 +18,7 @@ type ToolMessage struct {
 	Input string `json:"input"`
 }
 
-func IsValidToolMessage(message string, availableTools []Tool) bool {
+func FormatToolMessage(message string, availableTools []Tool) string {
 	lastBracket := strings.LastIndex(message, "]")
 	if lastBracket != -1 {
 		message = message[:lastBracket+1]
@@ -26,12 +26,11 @@ func IsValidToolMessage(message string, availableTools []Tool) bool {
 
 	var toolMessages []ToolMessage
 	err := json.Unmarshal([]byte(message), &toolMessages)
-
-	// If there's an error, the JSON was invalid.
+	// If there's an error, the JSON was invalid. Return an empty list.
 	if err != nil {
 		// Log the specific unmarshalling error for debugging.
 		fmt.Printf("Tool message JSON unmarshal error: %v\n", err)
-		return false
+		return ""
 	}
 
 	// Convert the list of available tools into a set for faster lookup.
@@ -40,24 +39,39 @@ func IsValidToolMessage(message string, availableTools []Tool) bool {
 		availableToolNames[tool.Name] = true
 	}
 
-	if len(toolMessages) == 0 {
-		return false
-	}
+	validToolMessages := make([]ToolMessage, 0)
 
 	// Iterate through the tool messages, checking that each has a non-empty "name" and "input",
-	// and that the "name" corresponds to an available tool.
+	// and that the "name" corresponds to an available tool. Keep only valid tool messages.
 	for _, toolMessage := range toolMessages {
 		// Trim leading and trailing whitespace from the name and input.
 		name := strings.TrimSpace(toolMessage.Name)
 		input := strings.TrimSpace(toolMessage.Input)
 
-		if name == "" || input == "" || !availableToolNames[name] {
-			return false
+		if name == "" {
+			fmt.Printf("Invalid tool message: name is empty\n")
+		}
+		if input == "" {
+			fmt.Printf("Invalid tool message: input is empty\n")
+		}
+		if !availableToolNames[name] {
+			fmt.Printf("Invalid tool message: tool name '%s' is not available\n", name)
+		}
+
+		if name != "" && input != "" && availableToolNames[name] {
+			validToolMessages = append(validToolMessages, toolMessage)
 		}
 	}
 
-	// If no invalid tool messages were found, the JSON is valid.
-	return true
+	// Convert the valid tool messages back into a JSON string.
+	validToolMessagesJSON, err := json.Marshal(validToolMessages)
+	if err != nil {
+		// Log the error and return an empty JSON array.
+		fmt.Printf("Error marshalling tool messages back into JSON: %v\n", err)
+		return ""
+	}
+
+	return string(validToolMessagesJSON)
 }
 
 // ParseTools parses a JSON string into an array of Tools

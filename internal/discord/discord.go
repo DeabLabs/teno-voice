@@ -144,7 +144,7 @@ func HandleIncomingPackets(ctx context.Context, cancelFunc context.CancelFunc, c
 				var username string
 				user, err := client.Rest().GetMember(conn.GuildID(), userID)
 				if err != nil {
-					fmt.Printf("error getting user: %s\n", err)
+					// fmt.Printf("error getting user: %s\n", err)
 					username = "User"
 				} else {
 					username = user.User.Username

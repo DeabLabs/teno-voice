@@ -290,10 +290,10 @@ func (r *Responder) getTokenStream(ctx context.Context, sentenceChan chan string
 	if toolMessageBuilder.Len() > 0 {
 		toolMessage := toolMessageBuilder.String()
 		log.Printf("Tool message: %v\n", toolMessage)
-		if tools.IsValidToolMessage(toolMessage, r.PromptContents.Tools) {
-			toolMessageChan <- toolMessage
-		} else {
-			fmt.Printf("Invalid tool message: %v\n", toolMessage)
+
+		validToolMessage := tools.FormatToolMessage(toolMessage, r.PromptContents.Tools)
+		if validToolMessage != "" {
+			toolMessageChan <- validToolMessage
 		}
 	}
 
