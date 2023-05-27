@@ -108,8 +108,22 @@ func (t *Transcript) AddInterruptionLine(username string, botName string) {
 	t.addLine(newLine)
 }
 
-func (t *Transcript) AddTaskReminderLine() {
-	text := "[Complete pending tasks]"
+func (t *Transcript) AddTaskReminderLine(task string) {
+	text := "Complete the task: " + task
+
+	newLine := &Line{
+		Text:     text,
+		Username: "",
+		UserId:   "",
+		Type:     "system",
+		Time:     time.Now(),
+	}
+
+	t.addLine(newLine)
+}
+
+func (t *Transcript) AddNewDocumentAlertLine() {
+	text := "New document available, please relay the relevant information to the voice channel"
 
 	newLine := &Line{
 		Text:     text,
@@ -159,7 +173,9 @@ func (t *Transcript) ToChatCompletionMessages() []goOpenai.ChatCompletionMessage
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	messages := make([]goOpenai.ChatCompletionMessage, len(t.lines))
+	var messages []goOpenai.ChatCompletionMessage
+	assistantBuffer := ""
+
 	for i, line := range t.lines {
 		var role string
 		var content string
@@ -169,15 +185,24 @@ func (t *Transcript) ToChatCompletionMessages() []goOpenai.ChatCompletionMessage
 			content = line.Text
 		case "assistant":
 			role = goOpenai.ChatMessageRoleAssistant
-			content = line.Text
+			assistantBuffer += line.Text + " "
+			// If the next line is not from assistant or it is the last line, create a message from buffer
+			if i == len(t.lines)-1 || t.lines[i+1].Type != "assistant" {
+				messages = append(messages, goOpenai.ChatCompletionMessage{
+					Role:    role,
+					Content: strings.TrimSpace(assistantBuffer),
+				})
+				assistantBuffer = ""
+			}
+			continue
 		default:
 			role = goOpenai.ChatMessageRoleUser
 			content = line.Username + ": " + line.Text
 		}
-		messages[i] = goOpenai.ChatCompletionMessage{
+		messages = append(messages, goOpenai.ChatCompletionMessage{
 			Role:    role,
 			Content: content,
-		}
+		})
 	}
 	return messages
 }

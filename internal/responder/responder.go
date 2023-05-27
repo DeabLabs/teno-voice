@@ -428,6 +428,10 @@ func (r *Responder) playSynthesizedSentences(ctx context.Context, receivedTransc
 func (r *Responder) NewTranscription(line string, botNameSpoken float64, username string, userId string, usageEvent usage.UsageEvent) {
 	r.userSpeaking = false
 
+	if r.cancelResponse != nil {
+		r.cancelResponse()
+	}
+
 	newLine := &transcript.Line{
 		Text:     line,
 		Username: username,
@@ -436,12 +440,9 @@ func (r *Responder) NewTranscription(line string, botNameSpoken float64, usernam
 		Time:     time.Now(),
 	}
 
-	r.Transcript.AddSpokenLine(newLine)
 	r.linesSinceLastResponse++
 
-	if r.cancelResponse != nil {
-		r.cancelResponse()
-	}
+	r.Transcript.AddSpokenLine(newLine)
 
 	switch r.VoiceUXConfig.SpeakingMode {
 	case "NeverSpeak":
@@ -509,7 +510,7 @@ func (r *Responder) AutoRespond(ctx context.Context) {
 			if r.VoiceUXConfig.AutoRespondInterval != 0 && len(r.PromptContents.Tasks) > 0 {
 				// Check if AutoRespondInterval time has passed since the last response
 				if time.Since(r.LastResponseEnd) >= time.Duration(r.VoiceUXConfig.AutoRespondInterval)*time.Second {
-					r.Transcript.AddTaskReminderLine()
+					r.Transcript.AddTaskReminderLine(r.PromptContents.Tasks[0].Name)
 					r.AttemptToRespond(false)
 				}
 				time.Sleep(time.Duration(max(1, r.VoiceUXConfig.AutoRespondInterval)) * time.Second)
