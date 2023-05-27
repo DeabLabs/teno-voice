@@ -3,7 +3,6 @@ package openai
 import (
 	"context"
 	"errors"
-	"log"
 
 	"com.deablabs.teno-voice/internal/llm/promptbuilder"
 	"com.deablabs.teno-voice/internal/llm/tiktoken"
@@ -64,7 +63,7 @@ func (o *OpenAILLM) GetTranscriptResponseStream(transcript *transcript.Transcrip
 
 	transcriptMessages, transcriptString := transcript.ToChatCompletionMessages()
 
-	log.Print("Transcript: " + transcriptString)
+	// log.Print("Transcript: " + transcriptString)
 
 	messages = append(messages, transcriptMessages...)
 
