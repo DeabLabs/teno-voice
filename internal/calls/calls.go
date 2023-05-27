@@ -43,6 +43,7 @@ type Config struct {
 }
 
 type Call struct {
+	startTime           time.Time
 	connection          *voice.Conn
 	closeSignalChan     chan struct{}
 	transcriptSSEChan   chan string
@@ -185,6 +186,7 @@ func JoinVoiceChannel(dependencies *deps.Deps) func(w http.ResponseWriter, r *ht
 
 		// Create call
 		newCall := &Call{
+			startTime:           time.Now(),
 			connection:          &conn,
 			closeSignalChan:     closeSignal,
 			transcriptSSEChan:   transcriptSSEChannel,
@@ -314,14 +316,14 @@ func UpdateConfig(dependencies *deps.Deps) func(w http.ResponseWriter, r *http.R
 				return
 			}
 
-			// shouldRespond := len(call.responder.PromptContents.Tasks) < len(config.PromptContents.Tasks)
+			shouldRespond := len(call.responder.PromptContents.Tasks) < len(config.PromptContents.Tasks)
 
 			call.responder.PromptContents = *config.PromptContents
 
-			// if shouldRespond {
-			// 	call.responder.Transcript.AddTaskReminderLine()
-			// 	call.responder.AttemptToRespond()
-			// }
+			if shouldRespond && time.Since(call.startTime) > time.Second*3 {
+				call.responder.Transcript.AddTaskReminderLine()
+				call.responder.AttemptToRespond(false)
+			}
 
 		}
 

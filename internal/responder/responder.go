@@ -66,6 +66,7 @@ type Responder struct {
 	usageSSEChannel        chan string
 	isSpeaking             bool
 	isResponding           bool
+	userSpeaking           bool
 	LastResponseEnd        time.Time
 }
 
@@ -93,10 +94,11 @@ func NewResponder(ctx context.Context, args NewResponderArgs) *Responder {
 		usageSSEChannel:        args.UsageSSEChannel,
 		isSpeaking:             false,
 		isResponding:           false,
+		userSpeaking:           false,
 		LastResponseEnd:        time.Now(),
 	}
 
-	// go responder.AutoRespond(ctx)
+	go responder.AutoRespond(ctx)
 
 	return responder
 }
@@ -111,7 +113,8 @@ func (r *Responder) Cleanup() {
 	r.Transcript.Cleanup()
 }
 
-func (r *Responder) Respond(receivedTranscriptionTime time.Time) context.CancelFunc {
+func (r *Responder) Respond() context.CancelFunc {
+	startRespondingTime := time.Now()
 	r.isResponding = true
 	ctx, cancelFunc := context.WithCancel(context.Background())
 	sentenceChan := make(chan string)
@@ -140,7 +143,7 @@ func (r *Responder) Respond(receivedTranscriptionTime time.Time) context.CancelF
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		r.playSynthesizedSentences(ctx, receivedTranscriptionTime, audioStreamChan)
+		r.playSynthesizedSentences(ctx, startRespondingTime, audioStreamChan)
 	}()
 
 	// Start a goroutine to wait for all other goroutines to finish
@@ -157,6 +160,7 @@ func (r *Responder) Respond(receivedTranscriptionTime time.Time) context.CancelF
 			for toolMessage := range toolMessageChan {
 				select {
 				case r.toolMessagesSSEChannel <- toolMessage:
+					r.Transcript.AddToolMessageLine(toolMessage)
 				default:
 				}
 
@@ -172,12 +176,19 @@ func (r *Responder) Respond(receivedTranscriptionTime time.Time) context.CancelF
 	return cancelFunc
 }
 
-func (r *Responder) AttemptToRespond() {
-	if r.isSpeaking || r.isResponding || r.VoiceUXConfig.SpeakingMode == "NeverSpeak" {
-		return
+func (r *Responder) AttemptToRespond(interruptThinking bool) {
+
+	if interruptThinking {
+		if r.userSpeaking || r.isSpeaking || r.VoiceUXConfig.SpeakingMode == "NeverSpeak" {
+			return
+		}
+	} else {
+		if r.userSpeaking || r.isSpeaking || r.isResponding || r.VoiceUXConfig.SpeakingMode == "NeverSpeak" {
+			return
+		}
 	}
 
-	r.cancelResponse = r.Respond(time.Now())
+	r.cancelResponse = r.Respond()
 }
 
 func (r *Responder) getTokenStream(ctx context.Context, sentenceChan chan string, toolMessageChan chan string) {
@@ -281,7 +292,6 @@ func (r *Responder) getTokenStream(ctx context.Context, sentenceChan chan string
 		log.Printf("Tool message: %v\n", toolMessage)
 		if tools.IsValidToolMessage(toolMessage, r.PromptContents.Tools) {
 			toolMessageChan <- toolMessage
-			r.Transcript.AddToolMessageLine(toolMessage)
 		} else {
 			fmt.Printf("Invalid tool message: %v\n", toolMessage)
 		}
@@ -312,7 +322,8 @@ func (r *Responder) synthesizeSentences(ctx context.Context, sentenceChan chan s
 			return
 		default:
 		}
-		opusPackets, usageEvent, err := r.TtsService.Synthesize(sentence)
+
+		opusPackets, usageEvent, err := r.TtsService.Synthesize(strings.TrimSpace(strings.TrimPrefix(sentence, r.BotName+": ")))
 		if err != nil {
 			fmt.Printf("Error generating speech: %v\n", err)
 			continue
@@ -349,6 +360,8 @@ func (r *Responder) playSynthesizedSentences(ctx context.Context, receivedTransc
 
 		r.setSpeaking(true)
 
+		speakingTime := time.Now()
+
 		if firstSentence {
 			r.isSpeaking = true
 			transcriptionToResponseLatency := time.Since(receivedTranscriptionTime)
@@ -379,6 +392,7 @@ func (r *Responder) playSynthesizedSentences(ctx context.Context, receivedTransc
 					r.setSpeaking(false)
 					opusPackets.Close()
 					r.isResponding = false
+					r.botLineSpoken(r.getCutoffSentence(speakingTime, sentence))
 					r.LastResponseEnd = time.Now()
 					return
 				default:
@@ -412,7 +426,7 @@ func (r *Responder) playSynthesizedSentences(ctx context.Context, receivedTransc
 }
 
 func (r *Responder) NewTranscription(line string, botNameSpoken float64, username string, userId string, usageEvent usage.UsageEvent) {
-	receivedTranscriptionTime := time.Now()
+	r.userSpeaking = false
 
 	newLine := &transcript.Line{
 		Text:     line,
@@ -451,10 +465,7 @@ func (r *Responder) NewTranscription(line string, botNameSpoken float64, usernam
 
 	// Only respond if the bot is awake
 	if r.awake {
-		if r.isSpeaking {
-			r.Transcript.AddInterruptionLine(username, r.BotName)
-		}
-		r.cancelResponse = r.Respond(receivedTranscriptionTime)
+		r.AttemptToRespond(true)
 	}
 
 	usageJson, err := usage.UsageEventToJSON(usageEvent)
@@ -483,6 +494,7 @@ func (r *Responder) botLineSpoken(line string) {
 }
 
 func (r *Responder) InterimTranscriptionReceived() {
+	r.userSpeaking = true
 	if r.cancelResponse != nil {
 		r.cancelResponse()
 	}
@@ -498,7 +510,7 @@ func (r *Responder) AutoRespond(ctx context.Context) {
 				// Check if AutoRespondInterval time has passed since the last response
 				if time.Since(r.LastResponseEnd) >= time.Duration(r.VoiceUXConfig.AutoRespondInterval)*time.Second {
 					r.Transcript.AddTaskReminderLine()
-					r.AttemptToRespond()
+					r.AttemptToRespond(false)
 				}
 				time.Sleep(time.Duration(max(1, r.VoiceUXConfig.AutoRespondInterval)) * time.Second)
 			} else {
@@ -597,4 +609,29 @@ func (r *Responder) sendSilentFrames(frames int) {
 		// Send the payload to the playAudioChannel
 		r.playAudioChannel <- silenceOpusFrame
 	}
+}
+
+func (r *Responder) getCutoffSentence(speakingTime time.Time, sentence string) string {
+	speakingRateWPM := 150
+
+	now := time.Now()
+	duration := now.Sub(speakingTime)
+
+	// Convert duration to seconds and speakingRate to words per second
+	seconds := duration.Seconds()
+	wordsPerSecond := float64(speakingRateWPM) / 60.0
+
+	// Calculate the number of words spoken
+	wordsSpoken := int(seconds * wordsPerSecond)
+
+	// Get the words from the sentence
+	words := strings.Fields(sentence)
+
+	// If wordsSpoken is more than the length of words, we return all the words
+	if wordsSpoken > len(words) {
+		wordsSpoken = len(words)
+	}
+
+	// Return the words spoken
+	return strings.Join(words[:wordsSpoken], " ") + "...[interrupted]"
 }
