@@ -316,22 +316,32 @@ func UpdateConfig(dependencies *deps.Deps) func(w http.ResponseWriter, r *http.R
 				return
 			}
 
-			oldNumDocuments := len(call.responder.PromptContents.Documents)
-			newNumDocuments := len(config.PromptContents.Documents)
+			// oldNumDocuments := len(call.responder.PromptContents.Documents)
+			// newNumDocuments := len(config.PromptContents.Documents)
 
-			shouldRespond := oldNumDocuments < newNumDocuments
+			oldNumTasks := len(call.responder.PromptContents.Tasks)
+			newNumTasks := len(config.PromptContents.Tasks)
+
+			shouldRespond := oldNumTasks < newNumTasks
 
 			call.responder.PromptContents = *config.PromptContents
 
 			if shouldRespond && time.Since(call.startTime) > time.Second*3 {
 				// Get names of the new documents
-				newDocuments := call.responder.PromptContents.Documents[oldNumDocuments:]
-				newDocumentNames := make([]string, len(newDocuments))
-				for i, doc := range newDocuments {
-					newDocumentNames[i] = doc.Name
+				// newDocuments := call.responder.PromptContents.Documents[oldNumDocuments:]
+				// newDocumentNames := make([]string, len(newDocuments))
+				// for i, doc := range newDocuments {
+				// 	newDocumentNames[i] = doc.Name
+				// }
+
+				// Get names of the new tasks
+				newTasks := call.responder.PromptContents.Tasks[oldNumTasks:]
+				newTaskNames := make([]string, len(newTasks))
+				for i, task := range newTasks {
+					newTaskNames[i] = task.Name
 				}
 
-				call.responder.Transcript.AddNewDocumentAlertLine(newDocumentNames)
+				call.responder.Transcript.AddTaskReminderLine(newTaskNames[0])
 				call.responder.AttemptToRespond(false)
 			}
 		}

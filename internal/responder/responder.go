@@ -488,7 +488,9 @@ func (r *Responder) botLineSpoken(line string) {
 		Type:     "assistant",
 		Time:     time.Now(),
 	}
-	r.Transcript.AddSpokenLine(newLine)
+	if line != "" {
+		r.Transcript.AddSpokenLine(newLine)
+	}
 
 	// Reset the counter when the bot speaks
 	r.linesSinceLastResponse = 0
@@ -633,6 +635,11 @@ func (r *Responder) getCutoffSentence(speakingTime time.Time, sentence string) s
 		wordsSpoken = len(words)
 	}
 
+	// If there were no words spoken, return an empty string
+	if wordsSpoken == 0 {
+		return ""
+	}
+
 	// Return the words spoken
-	return strings.Join(words[:wordsSpoken], " ") + "...[interrupted]"
+	return strings.Join(words[:wordsSpoken], " ") + "..."
 }
