@@ -25,6 +25,11 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+type SSEMessage struct {
+	Type string
+	Data string
+}
+
 type VoiceUXConfig struct {
 	SpeakingMode               string `validate:"required"`
 	LinesBeforeSleep           int
@@ -41,7 +46,7 @@ type NewResponderArgs struct {
 	VoiceUXConfig          VoiceUXConfig
 	PromptContents         *promptbuilder.PromptContents
 	TranscriptSSEChannel   chan string
-	ToolMessagesSSEChannel chan string
+	ToolMessagesSSEChannel chan SSEMessage
 	UsageSSEChannel        chan string
 	RedisClient            *redis.Client
 	RedisTranscriptKey     string
@@ -62,7 +67,7 @@ type Responder struct {
 	VoiceUXConfig          VoiceUXConfig
 	PromptContents         promptbuilder.PromptContents
 	botId                  snowflake.ID
-	toolMessagesSSEChannel chan string
+	toolMessagesSSEChannel chan SSEMessage
 	usageSSEChannel        chan string
 	isSpeaking             bool
 	isResponding           bool
@@ -159,7 +164,10 @@ func (r *Responder) Respond() context.CancelFunc {
 			// If the context wasn't cancelled, send the tool message
 			for toolMessage := range toolMessageChan {
 				select {
-				case r.toolMessagesSSEChannel <- toolMessage:
+				case r.toolMessagesSSEChannel <- SSEMessage{
+					Type: "tool-message",
+					Data: toolMessage,
+				}:
 					r.Transcript.AddToolMessageLine(toolMessage)
 				default:
 				}
@@ -448,20 +456,20 @@ func (r *Responder) NewTranscription(line string, botNameSpoken float64, usernam
 	case "NeverSpeak":
 		return
 	case "AlwaysSleep":
-		r.awake = false
+		r.Sleep()
 	case "AutoSleep":
 		if r.linesSinceLastResponse > r.VoiceUXConfig.LinesBeforeSleep {
-			r.awake = false
+			r.Sleep()
 			// log.Printf("Bot is asleep\n")
 		}
 
 		if botNameSpoken > r.VoiceUXConfig.BotNameConfidenceThreshold {
-			r.awake = true
+			r.WakeUp()
 			r.linesSinceLastResponse = 0
 			// log.Printf("Bot is awake\n")
 		}
 	default: // AlwaysSpeak
-		r.awake = true
+		r.WakeUp()
 	}
 
 	// Only respond if the bot is awake
@@ -477,6 +485,28 @@ func (r *Responder) NewTranscription(line string, botNameSpoken float64, usernam
 		case r.usageSSEChannel <- usageJson:
 		default:
 		}
+	}
+}
+
+func (r *Responder) WakeUp() {
+	if r.awake {
+		return
+	}
+	r.awake = true
+	r.toolMessagesSSEChannel <- SSEMessage{
+		Type: "state",
+		Data: "Awake",
+	}
+}
+
+func (r *Responder) Sleep() {
+	if !r.awake {
+		return
+	}
+	r.awake = false
+	r.toolMessagesSSEChannel <- SSEMessage{
+		Type: "state",
+		Data: "Asleep",
 	}
 }
 

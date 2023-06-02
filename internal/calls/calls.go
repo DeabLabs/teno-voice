@@ -2,6 +2,7 @@ package calls
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -47,7 +48,7 @@ type Call struct {
 	connection          *voice.Conn
 	closeSignalChan     chan struct{}
 	transcriptSSEChan   chan string
-	toolMessagesSSEChan chan string
+	toolMessagesSSEChan chan responder.SSEMessage
 	usageSSEChan        chan string
 	responder           *responder.Responder
 	transcriber         *speechtotext.Transcriber
@@ -144,7 +145,7 @@ func JoinVoiceChannel(dependencies *deps.Deps) func(w http.ResponseWriter, r *ht
 		transcriptSSEChannel := make(chan string)
 
 		// Make sse channel for tool messages
-		toolMessagesSSEChannel := make(chan string)
+		toolMessagesSSEChannel := make(chan responder.SSEMessage)
 
 		// Make sse channel for usage messages
 		usageSSEChannel := make(chan string)
@@ -466,7 +467,13 @@ func ToolMessagesSSEHandler(dependencies *deps.Deps) http.HandlerFunc {
 					return
 				}
 
-				fmt.Fprintf(w, "data: %s\n\n", toolMessage)
+				// Marshal toolMessage to JSON
+				jsonToolMessage, err := json.Marshal(toolMessage)
+				if err != nil {
+					fmt.Println(err)
+					return
+				}
+				fmt.Fprintf(w, "data: %s\n\n", string(jsonToolMessage))
 				flusher.Flush()
 			}
 		}
