@@ -185,7 +185,6 @@ func (r *Responder) Respond() context.CancelFunc {
 }
 
 func (r *Responder) AttemptToRespond(interruptThinking bool) {
-
 	if interruptThinking {
 		if r.userSpeaking || r.isSpeaking || r.VoiceUXConfig.SpeakingMode == "NeverSpeak" {
 			return
@@ -400,7 +399,7 @@ func (r *Responder) playSynthesizedSentences(ctx context.Context, receivedTransc
 					r.setSpeaking(false)
 					opusPackets.Close()
 					r.isResponding = false
-					r.botLineSpoken(r.getCutoffSentence(speakingTime, sentence))
+					r.botLineSpoken(r.getCutoffSentence(speakingTime, sentence), true)
 					r.LastResponseEnd = time.Now()
 					return
 				default:
@@ -419,7 +418,7 @@ func (r *Responder) playSynthesizedSentences(ctx context.Context, receivedTransc
 			}
 			opusPackets.Close() // Close the opusPackets after playing
 
-			r.botLineSpoken(sentence)
+			r.botLineSpoken(sentence, false)
 
 			// Remove the played audio stream from the map and increment the nextAudioIndex
 			delete(audioStreamMap, nextAudioIndex)
@@ -510,7 +509,7 @@ func (r *Responder) Sleep() {
 	}
 }
 
-func (r *Responder) botLineSpoken(line string) {
+func (r *Responder) botLineSpoken(line string, interrupted bool) {
 	newLine := &transcript.Line{
 		Text:     line,
 		Username: r.BotName,
@@ -523,7 +522,9 @@ func (r *Responder) botLineSpoken(line string) {
 	}
 
 	// Reset the counter when the bot speaks
-	r.linesSinceLastResponse = 0
+	if !interrupted {
+		r.linesSinceLastResponse = 0
+	}
 }
 
 func (r *Responder) InterimTranscriptionReceived() {
