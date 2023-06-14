@@ -25,6 +25,11 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+type SSEMessage struct {
+	Type string
+	Data string
+}
+
 type VoiceUXConfig struct {
 	SpeakingMode               string `validate:"required"`
 	LinesBeforeSleep           int
@@ -41,7 +46,7 @@ type NewResponderArgs struct {
 	VoiceUXConfig          VoiceUXConfig
 	PromptContents         *promptbuilder.PromptContents
 	TranscriptSSEChannel   chan string
-	ToolMessagesSSEChannel chan string
+	ToolMessagesSSEChannel chan SSEMessage
 	UsageSSEChannel        chan string
 	RedisClient            *redis.Client
 	RedisTranscriptKey     string
@@ -62,7 +67,7 @@ type Responder struct {
 	VoiceUXConfig          VoiceUXConfig
 	PromptContents         promptbuilder.PromptContents
 	botId                  snowflake.ID
-	toolMessagesSSEChannel chan string
+	toolMessagesSSEChannel chan SSEMessage
 	usageSSEChannel        chan string
 	isSpeaking             bool
 	isResponding           bool
@@ -159,7 +164,10 @@ func (r *Responder) Respond() context.CancelFunc {
 			// If the context wasn't cancelled, send the tool message
 			for toolMessage := range toolMessageChan {
 				select {
-				case r.toolMessagesSSEChannel <- toolMessage:
+				case r.toolMessagesSSEChannel <- SSEMessage{
+					Type: "tool-message",
+					Data: toolMessage,
+				}:
 					r.Transcript.AddToolMessageLine(toolMessage)
 				default:
 				}
@@ -177,7 +185,6 @@ func (r *Responder) Respond() context.CancelFunc {
 }
 
 func (r *Responder) AttemptToRespond(interruptThinking bool) {
-
 	if interruptThinking {
 		if r.userSpeaking || r.isSpeaking || r.VoiceUXConfig.SpeakingMode == "NeverSpeak" {
 			return
@@ -392,7 +399,7 @@ func (r *Responder) playSynthesizedSentences(ctx context.Context, receivedTransc
 					r.setSpeaking(false)
 					opusPackets.Close()
 					r.isResponding = false
-					r.botLineSpoken(r.getCutoffSentence(speakingTime, sentence))
+					r.botLineSpoken(r.getCutoffSentence(speakingTime, sentence), true)
 					r.LastResponseEnd = time.Now()
 					return
 				default:
@@ -411,7 +418,7 @@ func (r *Responder) playSynthesizedSentences(ctx context.Context, receivedTransc
 			}
 			opusPackets.Close() // Close the opusPackets after playing
 
-			r.botLineSpoken(sentence)
+			r.botLineSpoken(sentence, false)
 
 			// Remove the played audio stream from the map and increment the nextAudioIndex
 			delete(audioStreamMap, nextAudioIndex)
@@ -448,20 +455,20 @@ func (r *Responder) NewTranscription(line string, botNameSpoken float64, usernam
 	case "NeverSpeak":
 		return
 	case "AlwaysSleep":
-		r.awake = false
+		r.Sleep()
 	case "AutoSleep":
 		if r.linesSinceLastResponse > r.VoiceUXConfig.LinesBeforeSleep {
-			r.awake = false
+			r.Sleep()
 			// log.Printf("Bot is asleep\n")
 		}
 
 		if botNameSpoken > r.VoiceUXConfig.BotNameConfidenceThreshold {
-			r.awake = true
+			r.WakeUp()
 			r.linesSinceLastResponse = 0
 			// log.Printf("Bot is awake\n")
 		}
 	default: // AlwaysSpeak
-		r.awake = true
+		r.WakeUp()
 	}
 
 	// Only respond if the bot is awake
@@ -480,7 +487,29 @@ func (r *Responder) NewTranscription(line string, botNameSpoken float64, usernam
 	}
 }
 
-func (r *Responder) botLineSpoken(line string) {
+func (r *Responder) WakeUp() {
+	if r.awake {
+		return
+	}
+	r.awake = true
+	r.toolMessagesSSEChannel <- SSEMessage{
+		Type: "state",
+		Data: "Awake",
+	}
+}
+
+func (r *Responder) Sleep() {
+	if !r.awake {
+		return
+	}
+	r.awake = false
+	r.toolMessagesSSEChannel <- SSEMessage{
+		Type: "state",
+		Data: "Asleep",
+	}
+}
+
+func (r *Responder) botLineSpoken(line string, interrupted bool) {
 	newLine := &transcript.Line{
 		Text:     line,
 		Username: r.BotName,
@@ -488,10 +517,14 @@ func (r *Responder) botLineSpoken(line string) {
 		Type:     "assistant",
 		Time:     time.Now(),
 	}
-	r.Transcript.AddSpokenLine(newLine)
+	if line != "" {
+		r.Transcript.AddSpokenLine(newLine)
+	}
 
 	// Reset the counter when the bot speaks
-	r.linesSinceLastResponse = 0
+	if !interrupted {
+		r.linesSinceLastResponse = 0
+	}
 }
 
 func (r *Responder) InterimTranscriptionReceived() {
@@ -633,6 +666,11 @@ func (r *Responder) getCutoffSentence(speakingTime time.Time, sentence string) s
 		wordsSpoken = len(words)
 	}
 
+	// If there were no words spoken, return an empty string
+	if wordsSpoken == 0 {
+		return ""
+	}
+
 	// Return the words spoken
-	return strings.Join(words[:wordsSpoken], " ") + "...[interrupted]"
+	return strings.Join(words[:wordsSpoken], " ") + "..."
 }
