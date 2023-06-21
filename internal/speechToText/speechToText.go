@@ -51,7 +51,7 @@ func (t *Transcriber) NewStream(ctx context.Context, onClose func(), username st
 		Interim_results: true,
 		Search:          botNameWords,
 		Keywords:        append(t.Config.Keywords, botNameWords...),
-		Model:           "general",
+		Model:           "phonecall",
 		Tier:            "nova",
 	})
 
@@ -88,8 +88,11 @@ func (t *Transcriber) NewStream(ctx context.Context, onClose func(), username st
 
 				transcription, ok := jsonParsed.Path("channel.alternatives.0.transcript").Data().(string)
 
+				// Strip whitespace from transcription
+				transcription = strings.TrimSpace(transcription)
+
 				if ok {
-					if !jsonParsed.Path("is_final").Data().(bool) {
+					if !jsonParsed.Path("is_final").Data().(bool) && transcription != "" {
 						t.Responder.InterimTranscriptionReceived()
 					} else {
 						// Check if the bot name was spoken
@@ -108,7 +111,7 @@ func (t *Transcriber) NewStream(ctx context.Context, onClose func(), username st
 						usageEvent := usage.NewTranscriptionEvent("deepgram", "nova-streaming", jsonParsed.Path("duration").Data().(float64)/60.0)
 
 						// Check if there are alpha numeric characters in the transcription
-						if !strings.ContainsAny(transcription, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") {
+						if transcription != "" {
 							t.Responder.NewTranscription(transcription, botNameConfidence, username, userId, usageEvent)
 						}
 					}
