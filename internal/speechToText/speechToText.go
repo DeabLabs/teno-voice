@@ -51,7 +51,7 @@ func (t *Transcriber) NewStream(ctx context.Context, onClose func(), username st
 		Interim_results: true,
 		Search:          botNameWords,
 		Keywords:        append(t.Config.Keywords, botNameWords...),
-		Model:           "phonecall",
+		Model:           "general",
 		Tier:            "nova",
 	})
 
@@ -107,7 +107,8 @@ func (t *Transcriber) NewStream(ctx context.Context, onClose func(), username st
 
 						usageEvent := usage.NewTranscriptionEvent("deepgram", "nova-streaming", jsonParsed.Path("duration").Data().(float64)/60.0)
 
-						if transcription != "" {
+						// Check if there are alpha numeric characters in the transcription
+						if !strings.ContainsAny(transcription, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") {
 							t.Responder.NewTranscription(transcription, botNameConfidence, username, userId, usageEvent)
 						}
 					}
