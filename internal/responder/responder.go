@@ -239,6 +239,9 @@ func (r *Responder) getTokenStream(ctx context.Context, sentenceChan chan string
 			return
 		} else {
 			// Extract the token from the response
+			if len(response.Choices) == 0 {
+				continue
+			}
 			currentToken := response.Choices[0].Delta.Content
 
 			totalTokens++
