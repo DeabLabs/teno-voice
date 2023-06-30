@@ -112,7 +112,7 @@ func (a *AzureTTS) Synthesize(text string) (io.ReadCloser, usage.UsageEvent, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		return nil, nil, fmt.Errorf("unexpected status code: %d\nError: %v", resp.StatusCode, resp.Body)
 	}
 
 	opusReader := NewOpusPacketReader(resp.Body)
