@@ -303,7 +303,12 @@ func (r *Responder) getTokenStream(ctx context.Context, sentenceChan chan string
 
 		validToolMessage := tools.FormatToolMessage(toolMessage, r.PromptContents.Tools)
 		if validToolMessage != "" {
-			toolMessageChan <- validToolMessage
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				toolMessageChan <- validToolMessage
+			}
 		}
 	}
 
