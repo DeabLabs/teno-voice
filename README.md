@@ -6,8 +6,6 @@ Teno Voice is a REST API that connects to a Discord voice server, receives audio
 
 - [Installation](#installation)
 - [Usage](#usage)
-- [Configuration](#configuration)
-- [Development](#development)
 - [Structure](#structure)
 - [Contributing](#contributing)
 
@@ -34,44 +32,19 @@ Teno Voice is a REST API that connects to a Discord voice server, receives audio
 
 ## Usage
 
-1. Before running the application, make sure to [configure](#configuration) it properly.
-2. Run the application:
+Because of https restrictions using the deepgram API, teno-voice must be run on a server with valid SSL certificates.
 
-   ```
-   ./teno-voice
-   ```
+We use <https://fly.io> but you could configure a Dockerfile with certs or use a service like <https://letsencrypt.org/> to get valid certs locally.
 
-3. To interact with the REST API, use a tool like [curl](https://curl.se/) or [Postman](https://www.postman.com/).
+To initially launch on fly.io, you must have the fly CLI installed and be logged in.
 
-## Configuration
+`flyctl launch`
 
-To configure Teno Voice, create a `.env` file in the project root and set the following environment variables:
+To deploy new changes,
 
-```
-TOKEN=<your-discord-bot-token>
-```
+`flyctl deploy -a app-name`
 
-Replace `<your-discord-bot-token>` with the token for the Teno Discord bot.
-
-You will also need to setup and configure ngrok in order to run locally with wss and https support
-
-Follow the instructions here: https://ngrok.com/download
-
-Once you have ngrok installed, with your API key configured, run the following command:
-
-```
-ngrok http 8080
-```
-
-This will create a tunnel to your local machine on port 8080.
-
-## Development
-
-To work on the Teno Voice project, you'll need to have Go installed on your system. Use the following command to run the application in development mode:
-
-```
-go run .
-```
+Github actions are configured to deploy on push to main and production, using app names `teno-voice-staging` and `teno-voice` respectively.
 
 ## Structure
 
